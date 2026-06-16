@@ -12,4 +12,4 @@ SCHEDULE_TIME = "10:00"    # в 10:00 по Москве
 SUBSCRIPTION_PRICE = 500  # рублей
 
 # Telegram ID администраторов
-ADMIN_IDS = [181970023]  # замени на свой ID (узнать: @userinfobot)
+ADMIN_IDS = [181970023, 501215129]  # замени на свой ID (узнать: @userinfobot)
