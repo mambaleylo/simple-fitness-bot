@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -6,312 +7,531 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from config import BOT_TOKEN, SCHEDULE_DAYS, SCHEDULE_TIME
-from database import *
+from config import BOT_TOKEN, SCHEDULE_DAYS, SCHEDULE_TIME, ADMIN_IDS
+from database import (
+    add_user, is_subscribed, get_subscription_days_left,
+    activate_subscription, get_permanent_workouts, get_active_weekly_workouts,
+    has_completed_workout, mark_workout_done, cleanup_old_workouts,
+    add_weekly_workouts, add_permanent_workout, get_all_users, get_db
+)
 
-# Настройка бота
+logging.basicConfig(level=logging.INFO)
+
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
+scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
 
-# Состояния для FSM (ожидание ввода)
-class AddWorkoutState(StatesGroup):
-    waiting_for_title = State()
-    waiting_for_description = State()
-    waiting_for_url = State()
-    waiting_for_duration = State()
 
-# ========== КЛАВИАТУРЫ ==========
+# ========== FSM STATES ==========
+
+class AddPermanentState(StatesGroup):
+    title = State()
+    description = State()
+    url = State()
+    duration = State()
+
+class AddWeeklyState(StatesGroup):
+    title = State()
+    description = State()
+    url = State()
+    duration = State()
+
+class BroadcastState(StatesGroup):
+    text = State()
+
+
+# ========== KEYBOARDS ==========
+
 def main_menu(user_id=None):
-    """Главное меню (меняется если есть подписка)"""
     buttons = [
-        [InlineKeyboardButton(text="🏋️ Закрепленные тренировки", callback_data="permanent")],
+        [InlineKeyboardButton(text="🏋️ Закреплённые тренировки", callback_data="permanent")],
     ]
-    
     if user_id and is_subscribed(user_id):
-        buttons.append([InlineKeyboardButton(text="📅 Активные тренировки", callback_data="weekly")])
         days = get_subscription_days_left(user_id)
-        buttons.append([InlineKeyboardButton(text=f"⭐ Подписка активна ({days} дн.)", callback_data="subscription_info")])
+        buttons.append([InlineKeyboardButton(text="📅 Тренировки месяца", callback_data="weekly")])
+        buttons.append([InlineKeyboardButton(text=f"⭐ Подписка активна ({days} дн.)", callback_data="sub_info")])
     else:
-        buttons.append([InlineKeyboardButton(text="💎 Купить подписку", callback_data="buy_subscription")])
-    
+        buttons.append([InlineKeyboardButton(text="💎 Купить подписку", callback_data="buy_sub")])
     buttons.append([InlineKeyboardButton(text="📊 Мой прогресс", callback_data="progress")])
     buttons.append([InlineKeyboardButton(text="❓ Помощь", callback_data="help")])
-    
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-def workout_list_keyboard(workouts, workout_type):
-    """Клавиатура со списком тренировок"""
+
+def workout_list_keyboard(workouts, workout_type, user_id):
     buttons = []
     for w in workouts:
-        status = "✅ " if has_completed_workout(user_id, w['id'], workout_type) else "◻️ "
+        done = has_completed_workout(user_id, w["id"], workout_type)
+        status = "✅ " if done else "◻️ "
         buttons.append([InlineKeyboardButton(
             text=f"{status}{w['title']} ({w['duration']} мин)",
-            callback_data=f"workout_{workout_type}_{w['id']}"
+            callback_data=f"wk:{workout_type}:{w['id']}"
         )])
-    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_menu")])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# ========== КОМАНДЫ ==========
+
+def back_keyboard(target="back"):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ Назад", callback_data=target)]
+    ])
+
+
+# ========== COMMANDS ==========
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    user_id = message.from_user.id
-    username = message.from_user.username
-    
-    add_user(user_id, username)
-    
+    uid = message.from_user.id
+    add_user(uid, message.from_user.username)
     await message.answer(
         f"🔥 Привет, {message.from_user.first_name}!\n\n"
-        f"Я твой персональный фитнес-тренер.\n"
-        f"Каждую неделю я выдаю новые тренировки по расписанию.\n"
-        f"Доступны постоянные тренировки (разминка, заминка) и ежемесячный контент.\n\n"
-        f"⬇️ Выбери действие в меню:",
-        reply_markup=main_menu(user_id)
+        "Я твой персональный фитнес-тренер.\n"
+        "Каждую неделю выходят новые тренировки по расписанию.\n"
+        "Постоянные материалы (разминка, заминка и др.) доступны всегда.\n\n"
+        "⬇️ Выбери действие:",
+        reply_markup=main_menu(uid)
     )
 
-@dp.callback_query(F.data == "back_to_menu")
-async def back_to_menu(callback: types.CallbackQuery):
-    await callback.message.edit_text(
-        "📋 Главное меню:",
-        reply_markup=main_menu(callback.from_user.id)
-    )
+
+# ========== MAIN MENU CALLBACKS ==========
+
+@dp.callback_query(F.data == "back")
+async def cb_back(callback: types.CallbackQuery):
+    await callback.message.edit_text("📋 Главное меню:", reply_markup=main_menu(callback.from_user.id))
     await callback.answer()
+
 
 @dp.callback_query(F.data == "permanent")
-async def show_permanent(callback: types.CallbackQuery):
+async def cb_permanent(callback: types.CallbackQuery):
+    uid = callback.from_user.id
     workouts = get_permanent_workouts()
     if not workouts:
-        await callback.message.edit_text("📭 Пока нет закрепленных тренировок.", reply_markup=main_menu(callback.from_user.id))
-        await callback.answer()
-        return
-    
-    await callback.message.edit_text(
-        "🏋️ **Закрепленные тренировки** (доступны всегда):\n\n" +
-        "\n".join([f"• {w['title']} — {w['duration']} мин" for w in workouts]),
-        reply_markup=workout_list_keyboard(workouts, "permanent")
-    )
-    await callback.answer()
-
-@dp.callback_query(F.data == "weekly")
-async def show_weekly(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    if not is_subscribed(user_id):
-        await callback.answer("❌ Подписка не активна! Купите подписку для доступа.", show_alert=True)
-        return
-    
-    workouts = get_active_weekly_workouts()
-    if not workouts:
         await callback.message.edit_text(
-            "📭 Новые тренировки появятся на этой неделе!\n\n"
-            "Следи за расписанием — они приходят автоматически.",
-            reply_markup=main_menu(user_id)
+            "📭 Закреплённых тренировок пока нет.\n\nАдмин добавит их командой /add_permanent",
+            reply_markup=back_keyboard()
         )
         await callback.answer()
         return
-    
+    text = "🏋️ <b>Закреплённые тренировки</b> (доступны всегда):\n\n"
+    text += "\n".join(f"• {w['title']} — {w['duration']} мин" for w in workouts)
     await callback.message.edit_text(
-        "📅 **Активные тренировки этого месяца:**\n\n" +
-        "\n".join([f"• {w['title']} — {w['duration']} мин (неделя {w['week_number']})" for w in workouts]),
-        reply_markup=workout_list_keyboard(workouts, "weekly")
+        text,
+        reply_markup=workout_list_keyboard(workouts, "permanent", uid),
+        parse_mode="HTML"
     )
     await callback.answer()
 
-@dp.callback_query(F.data.startswith("workout_"))
-async def show_workout(callback: types.CallbackQuery):
-    _, workout_type, workout_id = callback.data.split("_")
-    workout_id = int(workout_id)
-    
+
+@dp.callback_query(F.data == "weekly")
+async def cb_weekly(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    if not is_subscribed(uid):
+        await callback.answer("❌ Подписка не активна! Купите доступ.", show_alert=True)
+        return
+    workouts = get_active_weekly_workouts()
+    if not workouts:
+        await callback.message.edit_text(
+            "📭 Тренировки этого месяца ещё не добавлены.\n\n"
+            "Они появляются по расписанию: ПН, СР, ПТ в 10:00.",
+            reply_markup=back_keyboard()
+        )
+        await callback.answer()
+        return
+    text = "📅 <b>Тренировки этого месяца:</b>\n\n"
+    text += "\n".join(
+        f"• {w['title']} — {w['duration']} мин (неделя {w['week_number']})" for w in workouts
+    )
+    await callback.message.edit_text(
+        text,
+        reply_markup=workout_list_keyboard(workouts, "weekly", uid),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("wk:"))
+async def cb_show_workout(callback: types.CallbackQuery):
+    _, workout_type, wid_str = callback.data.split(":", 2)
+    workout_id = int(wid_str)
+    uid = callback.from_user.id
+
     if workout_type == "permanent":
         workouts = get_permanent_workouts()
     else:
-        if not is_subscribed(callback.from_user.id):
+        if not is_subscribed(uid):
             await callback.answer("❌ Подписка не активна!", show_alert=True)
             return
         workouts = get_active_weekly_workouts()
-    
-    workout = next((w for w in workouts if w['id'] == workout_id), None)
+
+    workout = next((w for w in workouts if w["id"] == workout_id), None)
     if not workout:
         await callback.answer("Тренировка не найдена")
         return
-    
-    completed_status = "✅ Вы уже выполнили эту тренировку\n\n" if has_completed_workout(callback.from_user.id, workout_id, workout_type) else ""
-    
-    text = f"🏋️ **{workout['title']}**\n\n{completed_status}"
+
+    done = has_completed_workout(uid, workout_id, workout_type)
+    text = f"🏋️ <b>{workout['title']}</b>\n\n"
+    if done:
+        text += "✅ <i>Вы уже выполнили эту тренировку</i>\n\n"
     text += f"📝 {workout['description']}\n\n"
-    text += f"⏱️ Длительность: {workout['duration']} минут\n"
-    if workout['video_url']:
-        text += f"\n🎥 Видео: {workout['video_url']}"
-    
+    text += f"⏱️ Длительность: {workout['duration']} мин\n"
+    if workout["video_url"]:
+        text += f"\n🎥 <a href=\"{workout['video_url']}\">Смотреть видео</a>"
+
     buttons = []
-    if not has_completed_workout(callback.from_user.id, workout_id, workout_type):
-        buttons.append([InlineKeyboardButton(text="✅ Отметить выполненным", callback_data=f"complete_{workout_type}_{workout_id}")])
-    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data=workout_type if workout_type == "permanent" else "weekly")])
-    
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    if not done:
+        buttons.append([InlineKeyboardButton(
+            text="✅ Отметить выполненным",
+            callback_data=f"done:{workout_type}:{workout_id}"
+        )])
+    back_target = "permanent" if workout_type == "permanent" else "weekly"
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data=back_target)])
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        parse_mode="HTML"
+    )
     await callback.answer()
 
-@dp.callback_query(F.data.startswith("complete_"))
-async def complete_workout(callback: types.CallbackQuery):
-    _, workout_type, workout_id = callback.data.split("_")
-    workout_id = int(workout_id)
-    
-    if not is_subscribed(callback.from_user.id) and workout_type == "weekly":
+
+@dp.callback_query(F.data.startswith("done:"))
+async def cb_complete(callback: types.CallbackQuery):
+    _, workout_type, wid_str = callback.data.split(":", 2)
+    workout_id = int(wid_str)
+    uid = callback.from_user.id
+
+    if workout_type == "weekly" and not is_subscribed(uid):
         await callback.answer("❌ Подписка не активна!", show_alert=True)
         return
-    
-    if has_completed_workout(callback.from_user.id, workout_id, workout_type):
-        await callback.answer("Вы уже отмечали эту тренировку", show_alert=True)
+    if has_completed_workout(uid, workout_id, workout_type):
+        await callback.answer("Уже отмечено ранее.", show_alert=True)
         return
-    
-    mark_workout_done(callback.from_user.id, workout_id, workout_type)
-    await callback.answer("✅ Отлично! Тренировка отмечена. Так держать!", show_alert=True)
-    await show_workout(callback)
+
+    mark_workout_done(uid, workout_id, workout_type)
+    await callback.answer("✅ Отлично! Тренировка засчитана!", show_alert=True)
+    # Обновить экран тренировки
+    callback.data = f"wk:{workout_type}:{workout_id}"
+    await cb_show_workout(callback)
+
 
 @dp.callback_query(F.data == "progress")
-async def show_progress(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    permanent_done = 0
-    weekly_done = 0
-    
-    # Считаем выполненные тренировки
+async def cb_progress(callback: types.CallbackQuery):
+    uid = callback.from_user.id
     with get_db() as conn:
-        permanent_done = conn.execute(
-            'SELECT COUNT(*) FROM completed_workouts WHERE user_id = ? AND workout_type = "permanent"',
-            (user_id,)
+        perm = conn.execute(
+            'SELECT COUNT(*) FROM completed_workouts WHERE user_id=? AND workout_type="permanent"', (uid,)
         ).fetchone()[0]
-        weekly_done = conn.execute(
-            'SELECT COUNT(*) FROM completed_workouts WHERE user_id = ? AND workout_type = "weekly"',
-            (user_id,)
+        week = conn.execute(
+            'SELECT COUNT(*) FROM completed_workouts WHERE user_id=? AND workout_type="weekly"', (uid,)
         ).fetchone()[0]
-    
-    text = f"📊 **Твой прогресс**\n\n"
-    text += f"🏋️ Выполнено постоянных тренировок: {permanent_done}\n"
-    if is_subscribed(user_id):
-        text += f"📅 Выполнено еженедельных: {weekly_done}\n"
-        text += f"⏳ Осталось дней подписки: {get_subscription_days_left(user_id)}\n"
+
+    text = "📊 <b>Твой прогресс</b>\n\n"
+    text += f"🏋️ Постоянных тренировок выполнено: <b>{perm}</b>\n"
+    if is_subscribed(uid):
+        text += f"📅 Тренировок месяца выполнено: <b>{week}</b>\n"
+        text += f"⏳ Осталось дней подписки: <b>{get_subscription_days_left(uid)}</b>\n"
     else:
-        text += f"\n💎 Купи подписку, чтобы получить доступ к новым тренировкам!"
-    
-    await callback.message.edit_text(text, reply_markup=main_menu(user_id))
+        text += "\n💎 Купи подписку, чтобы получить доступ к новым тренировкам!"
+
+    await callback.message.edit_text(text, reply_markup=back_keyboard(), parse_mode="HTML")
     await callback.answer()
 
-@dp.callback_query(F.data == "buy_subscription")
-async def buy_subscription(callback: types.CallbackQuery):
-    text = "💎 **Подписка на фитнес-бот**\n\n"
-    text += "Цена: 500 ₽ / месяц\n\n"
-    text += "Что ты получишь:\n"
-    text += "• Новые тренировки каждую неделю\n"
-    text += "• Доступ ко всем материалам месяца\n"
-    text += "• Автоматическое обновление контента\n\n"
-    text += "⚡ Оплата: (нужно подключить платежную систему)\n"
-    text += "Пока что напишите @admin для активации"
-    
-    buttons = [[InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_menu")]]
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+@dp.callback_query(F.data == "buy_sub")
+async def cb_buy_sub(callback: types.CallbackQuery):
+    text = (
+        "💎 <b>Подписка на фитнес-бот</b>\n\n"
+        "Цена: <b>500 ₽ / месяц</b>\n\n"
+        "Что включено:\n"
+        "• Новые тренировки каждую неделю\n"
+        "• Доступ ко всем материалам месяца\n"
+        "• Автоматическое обновление контента\n\n"
+        "Для активации напишите администратору: @admin"
+    )
+    await callback.message.edit_text(text, reply_markup=back_keyboard(), parse_mode="HTML")
     await callback.answer()
 
-@dp.callback_query(F.data == "subscription_info")
-async def sub_info(callback: types.CallbackQuery):
+
+@dp.callback_query(F.data == "sub_info")
+async def cb_sub_info(callback: types.CallbackQuery):
     days = get_subscription_days_left(callback.from_user.id)
-    await callback.answer(f"Осталось дней подписки: {days}", show_alert=True)
+    await callback.answer(f"⭐ Осталось дней подписки: {days}", show_alert=True)
+
 
 @dp.callback_query(F.data == "help")
-async def show_help(callback: types.CallbackQuery):
-    text = "❓ **Помощь**\n\n"
-    text += "Как пользоваться ботом:\n"
-    text += "1. В меню выбери тип тренировок\n"
-    text += "2. Нажми на тренировку для просмотра\n"
-    text += "3. После выполнения отметь ее ✅\n\n"
-    text += "📅 Новые тренировки приходят по расписанию:\n"
-    text += f"• Дни: {', '.join(['ПН','ВТ','СР','ЧТ','ПТ','СБ','ВС'][d] for d in SCHEDULE_DAYS)}\n"
-    text += f"• Время: {SCHEDULE_TIME}\n\n"
-    text += "🔄 Каждый месяц старые тренировки удаляются"
-    
-    await callback.message.edit_text(text, reply_markup=main_menu(callback.from_user.id))
+async def cb_help(callback: types.CallbackQuery):
+    days_names = ["ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ", "ВС"]
+    days_str = ", ".join(days_names[d] for d in SCHEDULE_DAYS)
+    text = (
+        "❓ <b>Помощь</b>\n\n"
+        "Как пользоваться ботом:\n"
+        "1. Выбери тип тренировок в меню\n"
+        "2. Нажми на тренировку для просмотра\n"
+        "3. После выполнения отметь её ✅\n\n"
+        f"📅 Новые тренировки выходят: {days_str} в {SCHEDULE_TIME}\n"
+        "🔄 В конце каждого месяца контент обновляется\n\n"
+        "По вопросам оплаты: @admin"
+    )
+    await callback.message.edit_text(text, reply_markup=back_keyboard(), parse_mode="HTML")
     await callback.answer()
 
-# ========== АДМИНСКИЕ КОМАНДЫ (только для владельца) ==========
-ADMIN_IDS = [181970023]  # ВСТАВЬ СВОЙ TELEGRAM ID
 
-@dp.message(Command("add_permanent"))
-async def add_permanent_start(message: types.Message, state: FSMContext):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer("⛔ Недостаточно прав")
+# ========== ADMIN COMMANDS ==========
+
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
+
+
+@dp.message(Command("admin"))
+async def cmd_admin(message: types.Message):
+    if not is_admin(message.from_user.id):
         return
-    await state.set_state(AddWorkoutState.waiting_for_title)
-    await message.answer("Введи название закрепленной тренировки:")
+    text = (
+        "🔧 <b>Панель администратора</b>\n\n"
+        "/add_permanent — добавить закреплённую тренировку\n"
+        "/add_weekly — добавить тренировку месяца\n"
+        "/activate <code>USER_ID [дней]</code> — активировать подписку\n"
+        "/users — список пользователей\n"
+        "/broadcast — рассылка всем пользователям\n"
+        "/cleanup — вручную удалить старые тренировки"
+    )
+    await message.answer(text, parse_mode="HTML")
 
-@dp.message(AddWorkoutState.waiting_for_title)
-async def add_permanent_title(message: types.Message, state: FSMContext):
-    await state.update_data(title=message.text)
-    await state.set_state(AddWorkoutState.waiting_for_description)
-    await message.answer("Введи описание:")
 
-@dp.message(AddWorkoutState.waiting_for_description)
-async def add_permanent_desc(message: types.Message, state: FSMContext):
-    await state.update_data(description=message.text)
-    await state.set_state(AddWorkoutState.waiting_for_url)
-    await message.answer("Введи ссылку на видео (или 'нет'):")
-
-@dp.message(AddWorkoutState.waiting_for_url)
-async def add_permanent_url(message: types.Message, state: FSMContext):
-    url = None if message.text.lower() == 'нет' else message.text
-    await state.update_data(video_url=url)
-    await state.set_state(AddWorkoutState.waiting_for_duration)
-    await message.answer("Введи длительность в минутах:")
-
-@dp.message(AddWorkoutState.waiting_for_duration)
-async def add_permanent_duration(message: types.Message, state: FSMContext):
+# --- /activate ---
+@dp.message(Command("activate"))
+async def cmd_activate(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.answer("Использование: /activate USER_ID [дней]\nПример: /activate 123456789 30")
+        return
     try:
-        duration = int(message.text)
-        data = await state.get_data()
-        
-        with get_db() as conn:
-            # Получаем следующий order_num
-            result = conn.execute('SELECT COALESCE(MAX(order_num), 0) + 1 as next FROM permanent_workouts').fetchone()
-            order_num = result['next']
-            conn.execute(
-                'INSERT INTO permanent_workouts (title, description, video_url, duration, order_num) VALUES (?, ?, ?, ?, ?)',
-                (data['title'], data['description'], data['video_url'], duration, order_num)
-            )
-        
-        await message.answer(f"✅ Закрепленная тренировка '{data['title']}' добавлена!")
-        await state.clear()
+        uid = int(parts[1])
+        days = int(parts[2]) if len(parts) > 2 else 30
+        add_user(uid, None)
+        activate_subscription(uid, days)
+        await message.answer(f"✅ Подписка активирована для {uid} на {days} дней.")
     except ValueError:
-        await message.answer("❌ Введи число (минуты)")
+        await message.answer("❌ Неверный формат. USER_ID должен быть числом.")
 
-@dp.message(Command("add_weekly"))
-async def add_weekly(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer("⛔ Недостаточно прав")
+
+# --- /users ---
+@dp.message(Command("users"))
+async def cmd_users(message: types.Message):
+    if not is_admin(message.from_user.id):
         return
-    # Формат: /add_weekly Название | Описание | url | 15
-    try:
-        parts = message.text.split("|")
-        if len(parts) < 4:
-            await message.answer("❌ Формат: /add_weekly Название | Описание | url | минуты")
-            return
-        
-        title = parts[0].replace("/add_weekly", "").strip()
-        description = parts[1].strip()
-        url = parts[2].strip()
-        duration = int(parts[3].strip())
-        
-        add_weekly_workouts([{
-            'title': title,
-            'description': description,
-            'video_url': url if url != 'нет' else None,
-            'duration': duration
-        }])
-        await message.answer(f"✅ Добавлена недельная тренировка: {title}")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {e}")
+    users = get_all_users()
+    if not users:
+        await message.answer("Пользователей пока нет.")
+        return
+    lines = []
+    for u in users[:50]:
+        sub = u["subscribed_until"] or "нет"
+        name = f"@{u['username']}" if u["username"] else str(u["user_id"])
+        lines.append(f"• {name} (id: {u['user_id']}) — до {sub}")
+    text = f"👥 <b>Пользователи ({len(users)}):</b>\n\n" + "\n".join(lines)
+    if len(users) > 50:
+        text += f"\n\n... и ещё {len(users) - 50}"
+    await message.answer(text, parse_mode="HTML")
 
-# ========== ЗАПУСК ==========
+
+# --- /broadcast ---
+@dp.message(Command("broadcast"))
+async def cmd_broadcast_start(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.set_state(BroadcastState.text)
+    await message.answer("Введи текст рассылки (или /cancel для отмены):")
+
+
+@dp.message(BroadcastState.text)
+async def cmd_broadcast_send(message: types.Message, state: FSMContext):
+    await state.clear()
+    users = get_all_users()
+    sent, failed = 0, 0
+    for u in users:
+        try:
+            await bot.send_message(u["user_id"], message.text, parse_mode="HTML")
+            sent += 1
+        except Exception:
+            failed += 1
+    await message.answer(f"📢 Рассылка завершена.\n✅ Отправлено: {sent}\n❌ Ошибок: {failed}")
+
+
+# --- /cleanup ---
+@dp.message(Command("cleanup"))
+async def cmd_cleanup(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+    deleted = cleanup_old_workouts()
+    await message.answer(f"🗑️ Удалено старых тренировок: {deleted}")
+
+
+# --- /cancel ---
+@dp.message(Command("cancel"))
+async def cmd_cancel(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ Действие отменено.")
+
+
+# --- /add_permanent (FSM) ---
+@dp.message(Command("add_permanent"))
+async def cmd_add_permanent(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.set_state(AddPermanentState.title)
+    await message.answer("Введи <b>название</b> закреплённой тренировки:\n\n/cancel — отмена", parse_mode="HTML")
+
+
+@dp.message(AddPermanentState.title)
+async def ap_title(message: types.Message, state: FSMContext):
+    await state.update_data(title=message.text)
+    await state.set_state(AddPermanentState.description)
+    await message.answer("Введи <b>описание</b> тренировки:", parse_mode="HTML")
+
+
+@dp.message(AddPermanentState.description)
+async def ap_desc(message: types.Message, state: FSMContext):
+    await state.update_data(description=message.text)
+    await state.set_state(AddPermanentState.url)
+    await message.answer("Введи <b>ссылку на видео</b> (или напиши <code>нет</code>):", parse_mode="HTML")
+
+
+@dp.message(AddPermanentState.url)
+async def ap_url(message: types.Message, state: FSMContext):
+    url = None if message.text.lower().strip() in ("нет", "no", "-") else message.text.strip()
+    await state.update_data(video_url=url)
+    await state.set_state(AddPermanentState.duration)
+    await message.answer("Введи <b>длительность</b> в минутах (число):", parse_mode="HTML")
+
+
+@dp.message(AddPermanentState.duration)
+async def ap_duration(message: types.Message, state: FSMContext):
+    try:
+        duration = int(message.text.strip())
+    except ValueError:
+        await message.answer("❌ Введи число (минуты):")
+        return
+    data = await state.get_data()
+    add_permanent_workout(data["title"], data["description"], data["video_url"], duration)
+    await state.clear()
+    await message.answer(f"✅ Закреплённая тренировка «{data['title']}» добавлена!")
+
+
+# --- /add_weekly (FSM) ---
+@dp.message(Command("add_weekly"))
+async def cmd_add_weekly(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.set_state(AddWeeklyState.title)
+    await message.answer("Введи <b>название</b> тренировки месяца:\n\n/cancel — отмена", parse_mode="HTML")
+
+
+@dp.message(AddWeeklyState.title)
+async def aw_title(message: types.Message, state: FSMContext):
+    await state.update_data(title=message.text)
+    await state.set_state(AddWeeklyState.description)
+    await message.answer("Введи <b>описание</b>:", parse_mode="HTML")
+
+
+@dp.message(AddWeeklyState.description)
+async def aw_desc(message: types.Message, state: FSMContext):
+    await state.update_data(description=message.text)
+    await state.set_state(AddWeeklyState.url)
+    await message.answer("Введи <b>ссылку на видео</b> (или <code>нет</code>):", parse_mode="HTML")
+
+
+@dp.message(AddWeeklyState.url)
+async def aw_url(message: types.Message, state: FSMContext):
+    url = None if message.text.lower().strip() in ("нет", "no", "-") else message.text.strip()
+    await state.update_data(video_url=url)
+    await state.set_state(AddWeeklyState.duration)
+    await message.answer("Введи <b>длительность</b> в минутах:", parse_mode="HTML")
+
+
+@dp.message(AddWeeklyState.duration)
+async def aw_duration(message: types.Message, state: FSMContext):
+    try:
+        duration = int(message.text.strip())
+    except ValueError:
+        await message.answer("❌ Введи число:")
+        return
+    data = await state.get_data()
+    add_weekly_workouts([{
+        "title": data["title"],
+        "description": data["description"],
+        "video_url": data["video_url"],
+        "duration": duration
+    }])
+    await state.clear()
+    await message.answer(f"✅ Тренировка «{data['title']}» добавлена в тренировки месяца!")
+
+
+# ========== SCHEDULER JOBS ==========
+
+async def scheduled_cleanup():
+    """Запускается 1го числа каждого месяца — удаляет старые тренировки."""
+    deleted = cleanup_old_workouts()
+    logging.info(f"Scheduled cleanup: удалено {deleted} старых тренировок")
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, f"🗑️ Автоочистка: удалено {deleted} старых тренировок.")
+        except Exception:
+            pass
+
+
+async def notify_new_workout():
+    """
+    Срабатывает по расписанию SCHEDULE_DAYS в SCHEDULE_TIME.
+    Уведомляет подписчиков о новых тренировках.
+    """
+    workouts = get_active_weekly_workouts()
+    if not workouts:
+        return
+    users = get_all_users()
+    count = 0
+    for u in users:
+        if is_subscribed(u["user_id"]):
+            try:
+                await bot.send_message(
+                    u["user_id"],
+                    "🔔 <b>Новые тренировки доступны!</b>\n\n"
+                    "Открой меню и посмотри свежие тренировки этой недели 💪",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="📅 Открыть тренировки", callback_data="weekly")]
+                    ])
+                )
+                count += 1
+            except Exception:
+                pass
+    logging.info(f"Уведомление отправлено {count} подписчикам")
+
+
+# ========== STARTUP ==========
+
 async def main():
-    print("🤖 Бот запущен...")
+    # Планировщик: уведомления по расписанию
+    hour, minute = SCHEDULE_TIME.split(":")
+    for day in SCHEDULE_DAYS:
+        scheduler.add_job(
+            notify_new_workout,
+            trigger="cron",
+            day_of_week=day,
+            hour=int(hour),
+            minute=int(minute),
+        )
+    # Очистка 1го числа каждого месяца в 03:00
+    scheduler.add_job(scheduled_cleanup, trigger="cron", day=1, hour=3, minute=0)
+    scheduler.start()
+
+    logging.info("🤖 Бот запущен")
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
