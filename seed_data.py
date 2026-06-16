@@ -247,9 +247,6 @@ weekly = [
 
 # Вставляем постоянные тренировки
 with get_db() as conn:
-    # Очищаем для чистого демо
-    conn.execute("DELETE FROM permanent_workouts")
-    conn.execute("DELETE FROM weekly_workouts")
 
     for p in permanent:
         conn.execute(
