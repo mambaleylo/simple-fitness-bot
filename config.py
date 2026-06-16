@@ -1,7 +1,7 @@
 import os
 
 # Токен бота (получить у @BotFather)
-BOT_TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН_ЗДЕСЬ")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8660610624:AAFZhDDSpcTHvjr8scRzGEJE4nOx7a8ksTs")
 
 # Расписание уведомлений о новых тренировках
 # 0=ПН, 1=ВТ, 2=СР, 3=ЧТ, 4=ПТ, 5=СБ, 6=ВС
