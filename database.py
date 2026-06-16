@@ -4,6 +4,7 @@ from contextlib import contextmanager
 
 DB_NAME = "fitbot.db"
 
+
 @contextmanager
 def get_db():
     conn = sqlite3.connect(DB_NAME)
@@ -14,10 +15,9 @@ def get_db():
     finally:
         conn.close()
 
+
 def init_db():
-    """Создает все таблицы при первом запуске"""
     with get_db() as conn:
-        # Пользователи и их подписка
         conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -26,8 +26,6 @@ def init_db():
                 joined_at DATE DEFAULT CURRENT_DATE
             )
         ''')
-        
-        # Закрепленные тренировки (всегда доступны)
         conn.execute('''
             CREATE TABLE IF NOT EXISTS permanent_workouts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,8 +36,6 @@ def init_db():
                 order_num INTEGER
             )
         ''')
-        
-        # Еженедельные тренировки (живут 1 месяц)
         conn.execute('''
             CREATE TABLE IF NOT EXISTS weekly_workouts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,123 +47,126 @@ def init_db():
                 added_at DATE DEFAULT CURRENT_DATE
             )
         ''')
-        
-        # Выполненные тренировки (прогресс пользователя)
         conn.execute('''
             CREATE TABLE IF NOT EXISTS completed_workouts (
                 user_id INTEGER,
                 workout_id INTEGER,
-                workout_type TEXT, -- 'permanent' or 'weekly'
+                workout_type TEXT,
                 completed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (user_id, workout_id, workout_type)
             )
         ''')
 
+
 def add_user(user_id, username):
-    """Добавляет нового пользователя"""
     with get_db() as conn:
         conn.execute(
-            'INSERT OR IGNORE INTO users (user_id, username, subscribed_until) VALUES (?, ?, NULL)',
+            'INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)',
             (user_id, username)
         )
+        if username:
+            conn.execute(
+                'UPDATE users SET username=? WHERE user_id=?',
+                (username, user_id)
+            )
+
+
+def get_all_users():
+    with get_db() as conn:
+        return conn.execute('SELECT * FROM users ORDER BY joined_at DESC').fetchall()
+
 
 def activate_subscription(user_id, days=30):
-    """Активирует подписку на N дней"""
     with get_db() as conn:
-        until = (datetime.now() + timedelta(days=days)).date()
-        conn.execute(
-            'UPDATE users SET subscribed_until = ? WHERE user_id = ?',
-            (until, user_id)
-        )
+        # Если подписка ещё активна — продлеваем от текущей даты окончания
+        row = conn.execute('SELECT subscribed_until FROM users WHERE user_id=?', (user_id,)).fetchone()
+        if row and row['subscribed_until']:
+            current_end = datetime.strptime(row['subscribed_until'], '%Y-%m-%d').date()
+            if current_end >= datetime.now().date():
+                new_end = current_end + timedelta(days=days)
+            else:
+                new_end = datetime.now().date() + timedelta(days=days)
+        else:
+            new_end = datetime.now().date() + timedelta(days=days)
+        conn.execute('UPDATE users SET subscribed_until=? WHERE user_id=?', (str(new_end), user_id))
+
 
 def is_subscribed(user_id):
-    """Проверяет активна ли подписка"""
     with get_db() as conn:
-        result = conn.execute(
-            'SELECT subscribed_until FROM users WHERE user_id = ?',
-            (user_id,)
-        ).fetchone()
-        if result and result['subscribed_until']:
-            return datetime.now().date() <= datetime.strptime(result['subscribed_until'], '%Y-%m-%d').date()
+        row = conn.execute('SELECT subscribed_until FROM users WHERE user_id=?', (user_id,)).fetchone()
+        if row and row['subscribed_until']:
+            end = datetime.strptime(row['subscribed_until'], '%Y-%m-%d').date()
+            return datetime.now().date() <= end
         return False
 
+
 def get_subscription_days_left(user_id):
-    """Сколько дней осталось по подписке"""
     with get_db() as conn:
-        result = conn.execute(
-            'SELECT subscribed_until FROM users WHERE user_id = ?',
-            (user_id,)
-        ).fetchone()
-        if result and result['subscribed_until']:
-            until = datetime.strptime(result['subscribed_until'], '%Y-%m-%d').date()
-            left = (until - datetime.now().date()).days
-            return max(0, left)
+        row = conn.execute('SELECT subscribed_until FROM users WHERE user_id=?', (user_id,)).fetchone()
+        if row and row['subscribed_until']:
+            end = datetime.strptime(row['subscribed_until'], '%Y-%m-%d').date()
+            return max(0, (end - datetime.now().date()).days)
         return 0
 
-def add_weekly_workouts(workouts_list):
-    """Добавляет новые тренировки на неделю"""
+
+def get_permanent_workouts():
     with get_db() as conn:
-        # Получаем текущий номер недели года
-        week_num = datetime.now().isocalendar()[1]
-        for w in workouts_list:
-            conn.execute('''
-                INSERT INTO weekly_workouts (title, description, video_url, duration, week_number)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (w['title'], w['description'], w['video_url'], w['duration'], week_num))
+        return conn.execute('SELECT * FROM permanent_workouts ORDER BY order_num, id').fetchall()
+
+
+def add_permanent_workout(title, description, video_url, duration):
+    with get_db() as conn:
+        row = conn.execute('SELECT COALESCE(MAX(order_num), 0) + 1 AS n FROM permanent_workouts').fetchone()
+        order_num = row['n']
+        conn.execute(
+            'INSERT INTO permanent_workouts (title, description, video_url, duration, order_num) VALUES (?,?,?,?,?)',
+            (title, description, video_url, duration, order_num)
+        )
+
 
 def get_active_weekly_workouts():
-    """Получает тренировки текущего месяца"""
     with get_db() as conn:
-        # Берем тренировки за последние 30 дней
         month_ago = (datetime.now() - timedelta(days=30)).date()
-        return conn.execute('''
-            SELECT * FROM weekly_workouts 
-            WHERE added_at >= ? 
-            ORDER BY week_number, id
-        ''', (month_ago,)).fetchall()
+        return conn.execute(
+            'SELECT * FROM weekly_workouts WHERE added_at >= ? ORDER BY week_number, id',
+            (str(month_ago),)
+        ).fetchall()
+
+
+def add_weekly_workouts(workouts_list):
+    with get_db() as conn:
+        week_num = datetime.now().isocalendar()[1]
+        for w in workouts_list:
+            conn.execute(
+                'INSERT INTO weekly_workouts (title, description, video_url, duration, week_number) VALUES (?,?,?,?,?)',
+                (w['title'], w['description'], w['video_url'], w['duration'], week_num)
+            )
+
 
 def cleanup_old_workouts():
-    """Удаляет тренировки старше месяца (вызывается автоматически)"""
     with get_db() as conn:
         month_ago = (datetime.now() - timedelta(days=30)).date()
         deleted = conn.execute(
-            'DELETE FROM weekly_workouts WHERE added_at < ?',
-            (month_ago,)
+            'DELETE FROM weekly_workouts WHERE added_at < ?', (str(month_ago),)
         ).rowcount
-        print(f"🗑️ Удалено старых тренировок: {deleted}")
         return deleted
 
-def get_permanent_workouts():
-    """Все закрепленные тренировки (разминка, заминка и т.д.)"""
-    with get_db() as conn:
-        return conn.execute(
-            'SELECT * FROM permanent_workouts ORDER BY order_num'
-        ).fetchall()
-
-def add_permanent_workout(title, description, video_url, duration, order_num):
-    """Добавить закрепленную тренировку"""
-    with get_db() as conn:
-        conn.execute('''
-            INSERT INTO permanent_workouts (title, description, video_url, duration, order_num)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (title, description, video_url, duration, order_num))
 
 def mark_workout_done(user_id, workout_id, workout_type):
-    """Отмечает тренировку выполненной"""
     with get_db() as conn:
-        conn.execute('''
-            INSERT OR IGNORE INTO completed_workouts (user_id, workout_id, workout_type)
-            VALUES (?, ?, ?)
-        ''', (user_id, workout_id, workout_type))
+        conn.execute(
+            'INSERT OR IGNORE INTO completed_workouts (user_id, workout_id, workout_type) VALUES (?,?,?)',
+            (user_id, workout_id, workout_type)
+        )
+
 
 def has_completed_workout(user_id, workout_id, workout_type):
-    """Проверял ли пользователь эту тренировку"""
     with get_db() as conn:
-        result = conn.execute('''
-            SELECT 1 FROM completed_workouts 
-            WHERE user_id = ? AND workout_id = ? AND workout_type = ?
-        ''', (user_id, workout_id, workout_type)).fetchone()
-        return result is not None
+        row = conn.execute(
+            'SELECT 1 FROM completed_workouts WHERE user_id=? AND workout_id=? AND workout_type=?',
+            (user_id, workout_id, workout_type)
+        ).fetchone()
+        return row is not None
 
-# Инициализация БД при импорте
+
 init_db()
