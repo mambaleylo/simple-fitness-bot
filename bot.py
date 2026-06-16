@@ -232,7 +232,7 @@ async def show_help(callback: types.CallbackQuery):
     await callback.answer()
 
 # ========== АДМИНСКИЕ КОМАНДЫ (только для владельца) ==========
-ADMIN_IDS = [123456789]  # ВСТАВЬ СВОЙ TELEGRAM ID
+ADMIN_IDS = [181970023]  # ВСТАВЬ СВОЙ TELEGRAM ID
 
 @dp.message(Command("add_permanent"))
 async def add_permanent_start(message: types.Message, state: FSMContext):
