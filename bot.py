@@ -20,7 +20,9 @@ from database import (
     add_user, is_subscribed, get_subscription_days_left,
     activate_subscription, get_permanent_workouts, get_active_weekly_workouts,
     has_completed_workout, mark_workout_done, cleanup_old_workouts,
-    add_weekly_workouts, add_permanent_workout, get_all_users, get_db
+    add_weekly_workouts, add_permanent_workout, get_all_users, get_db,
+    get_nutrition_lectures, get_nutrition_lecture, add_nutrition_lecture,
+    delete_nutrition_lecture
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -52,12 +54,19 @@ class ActivateState(StatesGroup):
     user_id = State()
     days = State()
 
+class AddLectureState(StatesGroup):
+    title = State()
+    description = State()
+    url = State()
+    pdf = State()
+
 
 # ========== KEYBOARDS ==========
 
 def main_menu(user_id=None):
     buttons = [
         [InlineKeyboardButton(text="🏋️ Закреплённые тренировки", callback_data="permanent")],
+        [InlineKeyboardButton(text="🍎 Лекции по питанию", callback_data="lectures")],
     ]
     if user_id and is_subscribed(user_id):
         days = get_subscription_days_left(user_id)
@@ -74,6 +83,7 @@ def admin_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏋️ Добавить закреплённую", callback_data="adm:add_permanent")],
         [InlineKeyboardButton(text="📅 Добавить тренировку месяца", callback_data="adm:add_weekly")],
+        [InlineKeyboardButton(text="🍎 Добавить лекцию по питанию", callback_data="adm:add_lecture")],
         [InlineKeyboardButton(text="✅ Активировать подписку", callback_data="adm:activate")],
         [InlineKeyboardButton(text="👥 Список пользователей", callback_data="adm:users")],
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="adm:broadcast")],
@@ -191,6 +201,76 @@ async def cb_weekly(callback: types.CallbackQuery):
     text += "\n".join(f"• {w['title']} — {w['duration']} мин (неделя {w['week_number']})" for w in workouts)
     await callback.message.edit_text(text, reply_markup=workout_list_keyboard(workouts, "weekly", uid), parse_mode="HTML")
     await callback.answer()
+
+
+@dp.callback_query(F.data == "lectures")
+async def cb_lectures(callback: types.CallbackQuery):
+    """Лекции по питанию — бесплатно, без подписки."""
+    lectures = get_nutrition_lectures()
+    if not lectures:
+        await callback.message.edit_text(
+            "📭 Лекции по питанию пока не добавлены.\n\nСкоро здесь появятся материалы 🍎",
+            reply_markup=back_keyboard()
+        )
+        await callback.answer()
+        return
+
+    buttons = []
+    for lec in lectures:
+        pdf_icon = "📄" if lec["pdf_file_id"] else ""
+        buttons.append([InlineKeyboardButton(
+            text=f"🍎 {lec['title']} {pdf_icon}",
+            callback_data=f"lec:{lec['id']}"
+        )])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back")])
+
+    text = "🍎 <b>Лекции по питанию</b>\n\nДоступны всем бесплатно:\n\n"
+    text += "\n".join(f"• {lec['title']}" for lec in lectures)
+
+    await callback.message.edit_text(
+        text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("lec:"))
+async def cb_show_lecture(callback: types.CallbackQuery):
+    lecture_id = int(callback.data.split(":")[1])
+    lecture = get_nutrition_lecture(lecture_id)
+    if not lecture:
+        await callback.answer("Лекция не найдена")
+        return
+
+    text = f"🍎 <b>{lecture['title']}</b>\n\n📝 {lecture['description']}\n"
+    if lecture["video_url"]:
+        text += f"\n🎥 <a href=\"{lecture['video_url']}\">Смотреть видео</a>"
+    if lecture["pdf_file_id"]:
+        text += "\n\n📄 Материал в PDF — кнопка ниже"
+
+    buttons = []
+    if lecture["pdf_file_id"]:
+        buttons.append([InlineKeyboardButton(text="📄 Открыть PDF", callback_data=f"lecpdf:{lecture_id}")])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="lectures")])
+
+    await callback.message.edit_text(
+        text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("lecpdf:"))
+async def cb_send_lecture_pdf(callback: types.CallbackQuery):
+    lecture_id = int(callback.data.split(":")[1])
+    lecture = get_nutrition_lecture(lecture_id)
+    if not lecture or not lecture["pdf_file_id"]:
+        await callback.answer("PDF не найден")
+        return
+    await bot.send_document(
+        callback.from_user.id,
+        lecture["pdf_file_id"],
+        caption=f"📄 {lecture['title']}"
+    )
+    await callback.answer("📄 Файл отправлен!")
 
 
 @dp.callback_query(F.data.startswith("wk:"))
@@ -629,6 +709,91 @@ async def aw_duration(message: types.Message, state: FSMContext):
         ]),
         parse_mode="HTML"
     )
+
+
+# --- Добавить лекцию по питанию ---
+
+@dp.callback_query(F.data == "adm:add_lecture")
+async def adm_add_lecture_start(callback: types.CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await state.set_state(AddLectureState.title)
+    await callback.message.edit_text(
+        "🍎 <b>Новая лекция по питанию</b>\n\nВведи <b>название</b> лекции:",
+        reply_markup=cancel_keyboard(), parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@dp.message(AddLectureState.title)
+async def al_title(message: types.Message, state: FSMContext):
+    await state.update_data(title=message.text)
+    await state.set_state(AddLectureState.description)
+    await message.answer("Введи <b>описание</b> лекции:", reply_markup=cancel_keyboard(), parse_mode="HTML")
+
+
+@dp.message(AddLectureState.description)
+async def al_desc(message: types.Message, state: FSMContext):
+    await state.update_data(description=message.text)
+    await state.set_state(AddLectureState.url)
+    await message.answer(
+        "Введи <b>ссылку на видео</b> (если есть), или напиши <code>нет</code>:",
+        reply_markup=cancel_keyboard(), parse_mode="HTML"
+    )
+
+
+@dp.message(AddLectureState.url)
+async def al_url(message: types.Message, state: FSMContext):
+    url = None if message.text.lower().strip() in ("нет", "no", "-") else message.text.strip()
+    await state.update_data(video_url=url)
+    await state.set_state(AddLectureState.pdf)
+    await message.answer(
+        "📄 Пришли <b>PDF-файл</b> прямо сюда (как документ), или напиши <code>нет</code>, если файла не будет:",
+        reply_markup=cancel_keyboard(), parse_mode="HTML"
+    )
+
+
+@dp.message(AddLectureState.pdf, F.document)
+async def al_pdf_file(message: types.Message, state: FSMContext):
+    doc = message.document
+    if doc.mime_type != "application/pdf" and not doc.file_name.lower().endswith(".pdf"):
+        await message.answer("❌ Это не PDF-файл. Пришли PDF или напиши <code>нет</code>:",
+                              reply_markup=cancel_keyboard(), parse_mode="HTML")
+        return
+    data = await state.get_data()
+    add_nutrition_lecture(
+        data["title"], data["description"], data["video_url"],
+        pdf_file_id=doc.file_id, pdf_filename=doc.file_name
+    )
+    await state.clear()
+    await message.answer(
+        f"✅ Лекция «<b>{data['title']}</b>» добавлена с PDF-файлом!",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+        ]),
+        parse_mode="HTML"
+    )
+
+
+@dp.message(AddLectureState.pdf)
+async def al_pdf_text(message: types.Message, state: FSMContext):
+    if message.text and message.text.lower().strip() in ("нет", "no", "-"):
+        data = await state.get_data()
+        add_nutrition_lecture(data["title"], data["description"], data["video_url"])
+        await state.clear()
+        await message.answer(
+            f"✅ Лекция «<b>{data['title']}</b>» добавлена (без PDF)!",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+            ]),
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer(
+            "📄 Пришли PDF-файл как документ, или напиши <code>нет</code>:",
+            reply_markup=cancel_keyboard(), parse_mode="HTML"
+        )
 
 
 # --- Рассылка ---
