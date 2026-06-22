@@ -56,6 +56,18 @@ def init_db():
                 PRIMARY KEY (user_id, workout_id, workout_type)
             )
         ''')
+        # Лекции по питанию — доступны всем бесплатно, без привязки к подписке
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS nutrition_lectures (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT,
+                video_url TEXT,
+                pdf_file_id TEXT,
+                pdf_filename TEXT,
+                order_num INTEGER
+            )
+        ''')
 
 
 def add_user(user_id, username):
@@ -78,7 +90,6 @@ def get_all_users():
 
 def activate_subscription(user_id, days=30):
     with get_db() as conn:
-        # Если подписка ещё активна — продлеваем от текущей даты окончания
         row = conn.execute('SELECT subscribed_until FROM users WHERE user_id=?', (user_id,)).fetchone()
         if row and row['subscribed_until']:
             current_end = datetime.strptime(row['subscribed_until'], '%Y-%m-%d').date()
@@ -167,6 +178,33 @@ def has_completed_workout(user_id, workout_id, workout_type):
             (user_id, workout_id, workout_type)
         ).fetchone()
         return row is not None
+
+
+# ========== ЛЕКЦИИ ПО ПИТАНИЮ (бесплатно, без подписки) ==========
+
+def get_nutrition_lectures():
+    with get_db() as conn:
+        return conn.execute('SELECT * FROM nutrition_lectures ORDER BY order_num, id').fetchall()
+
+
+def get_nutrition_lecture(lecture_id):
+    with get_db() as conn:
+        return conn.execute('SELECT * FROM nutrition_lectures WHERE id=?', (lecture_id,)).fetchone()
+
+
+def add_nutrition_lecture(title, description, video_url, pdf_file_id=None, pdf_filename=None):
+    with get_db() as conn:
+        row = conn.execute('SELECT COALESCE(MAX(order_num), 0) + 1 AS n FROM nutrition_lectures').fetchone()
+        order_num = row['n']
+        conn.execute(
+            'INSERT INTO nutrition_lectures (title, description, video_url, pdf_file_id, pdf_filename, order_num) VALUES (?,?,?,?,?,?)',
+            (title, description, video_url, pdf_file_id, pdf_filename, order_num)
+        )
+
+
+def delete_nutrition_lecture(lecture_id):
+    with get_db() as conn:
+        conn.execute('DELETE FROM nutrition_lectures WHERE id=?', (lecture_id,))
 
 
 init_db()
