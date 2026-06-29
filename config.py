@@ -1,7 +1,7 @@
 import os
 
 # Токен бота (получить у @BotFather)
-BOT_TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН_ОТ_BOTFATHER")
+BOT_TOKEN = os.getenv("API_TOKEN") or os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН_ОТ_BOTFATHER")
 
 # Telegram ID администраторов (узнать свой: @userinfobot)
 ADMIN_IDS = [181970023]
