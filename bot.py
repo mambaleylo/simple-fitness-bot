@@ -14,7 +14,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config import (
     BOT_TOKEN, SCHEDULE_DAYS, SCHEDULE_TIME, ADMIN_IDS,
-    BEPAID_PROVIDER_TOKEN, SUBSCRIPTION_PRICE, SUBSCRIPTION_DAYS
+    BEPAID_PROVIDER_TOKEN, SUBSCRIPTION_PRICE, SUBSCRIPTION_DAYS,
+    SUBSCRIPTION_WELCOME_TEXT
 )
 from database import (
     add_user, is_subscribed, get_subscription_days_left,
@@ -22,7 +23,7 @@ from database import (
     has_completed_workout, mark_workout_done, cleanup_old_workouts,
     add_weekly_workouts, add_permanent_workout, get_all_users, get_db,
     get_nutrition_lectures, get_nutrition_lecture, add_nutrition_lecture,
-    delete_nutrition_lecture
+    delete_nutrition_lecture, get_next_unsent_workout, mark_workout_sent
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -438,11 +439,9 @@ async def successful_payment(message: types.Message):
 
     activate_subscription(uid, days)
 
-    # Уведомляем пользователя
+    # Приветственное сообщение от заказчика (текст согласован отдельно)
     await message.answer(
-        f"🎉 <b>Оплата прошла успешно!</b>\n\n"
-        f"✅ Подписка активирована на <b>{days} дней</b>\n\n"
-        "Теперь тебе доступны все тренировки месяца 💪",
+        SUBSCRIPTION_WELCOME_TEXT,
         reply_markup=main_menu(uid),
         parse_mode="HTML"
     )
@@ -581,7 +580,7 @@ async def adm_activate_days(callback: types.CallbackQuery, state: FSMContext):
     activate_subscription(uid, days)
     await state.clear()
     try:
-        await bot.send_message(uid, f"🎉 Ваша подписка активирована на <b>{days} дней</b>!", parse_mode="HTML")
+        await bot.send_message(uid, SUBSCRIPTION_WELCOME_TEXT, parse_mode="HTML")
     except Exception:
         pass
     await callback.message.edit_text(
@@ -845,27 +844,48 @@ async def scheduled_cleanup():
             pass
 
 
-async def notify_new_workout():
-    workouts = get_active_weekly_workouts()
-    if not workouts:
+async def send_tomorrow_workout():
+    """
+    По расписанию (ВС/ВТ/ЧТ, 20:00): вечером отправляем подписчикам
+    тренировку на завтра — следующую неотправленную по очерёдности.
+    """
+    workout = get_next_unsent_workout()
+    if not workout:
+        logging.info("Нет новых тренировок для отправки — добавь через /admin")
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    "⚠️ Сегодня вечером нужно отправить тренировку на завтра, "
+                    "но новых тренировок в очереди нет. Добавь через /admin."
+                )
+            except Exception:
+                pass
         return
+
     users = get_all_users()
+    text = (
+        f"🌙 <b>Тренировка на завтра готова!</b>\n\n"
+        f"🏋️ {workout['title']}\n"
+        f"⏱️ {workout['duration']} мин\n\n"
+        "Открой меню, чтобы посмотреть подробности 💪"
+    )
     count = 0
     for u in users:
         if is_subscribed(u["user_id"]):
             try:
                 await bot.send_message(
-                    u["user_id"],
-                    "🔔 <b>Новые тренировки доступны!</b>\n\nОткрой меню и посмотри свежие тренировки 💪",
-                    parse_mode="HTML",
+                    u["user_id"], text, parse_mode="HTML",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="📅 Открыть тренировки", callback_data="weekly")]
+                        [InlineKeyboardButton(text="📅 Открыть тренировку", callback_data=f"wk:weekly:{workout['id']}")]
                     ])
                 )
                 count += 1
             except Exception:
                 pass
-    logging.info(f"Уведомлено подписчиков: {count}")
+
+    mark_workout_sent(workout["id"])
+    logging.info(f"Тренировка «{workout['title']}» отправлена {count} подписчикам")
 
 
 # ========== STARTUP ==========
@@ -873,7 +893,7 @@ async def notify_new_workout():
 async def main():
     hour, minute = SCHEDULE_TIME.split(":")
     for day in SCHEDULE_DAYS:
-        scheduler.add_job(notify_new_workout, trigger="cron", day_of_week=day, hour=int(hour), minute=int(minute))
+        scheduler.add_job(send_tomorrow_workout, trigger="cron", day_of_week=day, hour=int(hour), minute=int(minute))
     scheduler.add_job(scheduled_cleanup, trigger="cron", day=1, hour=3, minute=0)
     scheduler.start()
     logging.info("🤖 Бот запущен")
