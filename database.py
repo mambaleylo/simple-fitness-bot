@@ -44,7 +44,8 @@ def init_db():
                 video_url TEXT,
                 duration INTEGER,
                 week_number INTEGER,
-                added_at DATE DEFAULT CURRENT_DATE
+                added_at DATE DEFAULT CURRENT_DATE,
+                sent_at DATETIME DEFAULT NULL
             )
         ''')
         conn.execute('''
@@ -142,6 +143,27 @@ def get_active_weekly_workouts():
             'SELECT * FROM weekly_workouts WHERE added_at >= ? ORDER BY week_number, id',
             (str(month_ago),)
         ).fetchall()
+
+
+def get_next_unsent_workout():
+    """
+    Возвращает следующую неотправленную тренировку (по очерёдности добавления).
+    Используется планировщиком: вечером отправляется тренировка на завтра.
+    """
+    with get_db() as conn:
+        month_ago = (datetime.now() - timedelta(days=30)).date()
+        return conn.execute(
+            'SELECT * FROM weekly_workouts WHERE added_at >= ? AND sent_at IS NULL ORDER BY id LIMIT 1',
+            (str(month_ago),)
+        ).fetchone()
+
+
+def mark_workout_sent(workout_id):
+    with get_db() as conn:
+        conn.execute(
+            'UPDATE weekly_workouts SET sent_at = CURRENT_TIMESTAMP WHERE id = ?',
+            (workout_id,)
+        )
 
 
 def add_weekly_workouts(workouts_list):
