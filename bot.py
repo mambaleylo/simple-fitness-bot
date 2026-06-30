@@ -227,7 +227,7 @@ async def cb_lectures(callback: types.CallbackQuery):
 
     buttons = []
     for lec in lectures:
-        pdf_icon = "📄" if lec["pdf_file_id"] else ""
+        pdf_icon = "📄" if lec["pdf_url"] else ""
         buttons.append([InlineKeyboardButton(
             text=f"🍎 {lec['title']} {pdf_icon}",
             callback_data=f"lec:{lec['id']}"
@@ -254,33 +254,17 @@ async def cb_show_lecture(callback: types.CallbackQuery):
     text = f"🍎 <b>{lecture['title']}</b>\n\n📝 {lecture['description']}\n"
     if lecture["video_url"]:
         text += f"\n🎥 <a href=\"{lecture['video_url']}\">Смотреть видео</a>"
-    if lecture["pdf_file_id"]:
-        text += "\n\n📄 Материал в PDF — кнопка ниже"
-
-    buttons = []
-    if lecture["pdf_file_id"]:
-        buttons.append([InlineKeyboardButton(text="📄 Открыть PDF", callback_data=f"lecpdf:{lecture_id}")])
-    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="lectures")])
+    if lecture["pdf_url"]:
+        text += f"\n📄 <a href=\"{lecture['pdf_url']}\">Открыть PDF-материал</a>"
 
     await callback.message.edit_text(
-        text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML"
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="lectures")]
+        ]),
+        parse_mode="HTML"
     )
     await callback.answer()
-
-
-@dp.callback_query(F.data.startswith("lecpdf:"))
-async def cb_send_lecture_pdf(callback: types.CallbackQuery):
-    lecture_id = int(callback.data.split(":")[1])
-    lecture = get_nutrition_lecture(lecture_id)
-    if not lecture or not lecture["pdf_file_id"]:
-        await callback.answer("PDF не найден")
-        return
-    await bot.send_document(
-        callback.from_user.id,
-        lecture["pdf_file_id"],
-        caption=f"📄 {lecture['title']}"
-    )
-    await callback.answer("📄 Файл отправлен!")
 
 
 @dp.callback_query(F.data.startswith("wk:"))
@@ -757,51 +741,29 @@ async def al_url(message: types.Message, state: FSMContext):
     await state.update_data(video_url=url)
     await state.set_state(AddLectureState.pdf)
     await message.answer(
-        "📄 Пришли <b>PDF-файл</b> прямо сюда (как документ), или напиши <code>нет</code>, если файла не будет:",
+        "📄 Пришли <b>ссылку на Google Drive</b> с PDF-файлом, "
+        "или напиши <code>нет</code>, если файла не будет:\n\n"
+        "<i>Ссылка хранится у тебя в Google Drive, поэтому файл никогда не потеряется, "
+        "даже если бот будет переустановлен.</i>",
         reply_markup=cancel_keyboard(), parse_mode="HTML"
     )
 
 
-@dp.message(AddLectureState.pdf, F.document)
-async def al_pdf_file(message: types.Message, state: FSMContext):
-    doc = message.document
-    if doc.mime_type != "application/pdf" and not doc.file_name.lower().endswith(".pdf"):
-        await message.answer("❌ Это не PDF-файл. Пришли PDF или напиши <code>нет</code>:",
-                              reply_markup=cancel_keyboard(), parse_mode="HTML")
-        return
+@dp.message(AddLectureState.pdf)
+async def al_pdf_url(message: types.Message, state: FSMContext):
+    text = message.text.strip() if message.text else ""
+    pdf_url = None if text.lower() in ("нет", "no", "-") else text
     data = await state.get_data()
-    add_nutrition_lecture(
-        data["title"], data["description"], data["video_url"],
-        pdf_file_id=doc.file_id, pdf_filename=doc.file_name
-    )
+    add_nutrition_lecture(data["title"], data["description"], data["video_url"], pdf_url=pdf_url)
     await state.clear()
+    suffix = " со ссылкой на PDF" if pdf_url else " (без PDF)"
     await message.answer(
-        f"✅ Лекция «<b>{data['title']}</b>» добавлена с PDF-файлом!",
+        f"✅ Лекция «<b>{data['title']}</b>» добавлена{suffix}!",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
         ]),
         parse_mode="HTML"
     )
-
-
-@dp.message(AddLectureState.pdf)
-async def al_pdf_text(message: types.Message, state: FSMContext):
-    if message.text and message.text.lower().strip() in ("нет", "no", "-"):
-        data = await state.get_data()
-        add_nutrition_lecture(data["title"], data["description"], data["video_url"])
-        await state.clear()
-        await message.answer(
-            f"✅ Лекция «<b>{data['title']}</b>» добавлена (без PDF)!",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
-            ]),
-            parse_mode="HTML"
-        )
-    else:
-        await message.answer(
-            "📄 Пришли PDF-файл как документ, или напиши <code>нет</code>:",
-            reply_markup=cancel_keyboard(), parse_mode="HTML"
-        )
 
 
 # ========== РЕДАКТИРОВАНИЕ КОНТЕНТА (закреплённые/месяц/лекции) ==========
@@ -833,7 +795,7 @@ CONTENT_CONFIG = {
         "update": update_nutrition_lecture,
         "delete": delete_nutrition_lecture,
         "fields": [("title", "Название"), ("description", "Описание"),
-                   ("video_url", "Ссылка на видео")],
+                   ("video_url", "Ссылка на видео"), ("pdf_url", "Ссылка на PDF (Google Drive)")],
     },
 }
 
@@ -892,10 +854,6 @@ async def adm_edit_item(callback: types.CallbackQuery):
             text=f"Изменить: {label}",
             callback_data=f"adm:edit_field:{content_type}:{item_id}:{field}"
         )])
-    if content_type == "lecture":
-        buttons.append([InlineKeyboardButton(
-            text="📄 Заменить PDF", callback_data=f"adm:edit_pdf:{item_id}"
-        )])
     buttons.append([InlineKeyboardButton(
         text="🗑️ Удалить", callback_data=f"adm:delete_item:{content_type}:{item_id}"
     )])
@@ -940,7 +898,7 @@ async def adm_edit_field_save(message: types.Message, state: FSMContext):
         except ValueError:
             await message.answer("❌ Длительность должна быть числом. Попробуй ещё раз:", reply_markup=cancel_keyboard())
             return
-    if field == "video_url" and value.lower() in ("нет", "no", "-"):
+    if field in ("video_url", "pdf_url") and value.lower() in ("нет", "no", "-"):
         value = None
 
     cfg["update"](item_id, field, value)
@@ -949,42 +907,6 @@ async def adm_edit_field_save(message: types.Message, state: FSMContext):
         "✅ Изменения сохранены!",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="◀️ К списку", callback_data=f"adm:edit_{content_type}_list")],
-            [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
-        ])
-    )
-
-
-@dp.callback_query(F.data.startswith("adm:edit_pdf:"))
-async def adm_edit_pdf_start(callback: types.CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    item_id = int(callback.data.split(":")[2])
-    await state.set_state(EditFieldState.waiting_value)
-    await state.update_data(content_type="lecture", item_id=item_id, field="pdf_file_id")
-    await callback.message.edit_text(
-        "📄 Пришли новый PDF-файл как документ:",
-        reply_markup=cancel_keyboard()
-    )
-    await callback.answer()
-
-
-@dp.message(EditFieldState.waiting_value, F.document)
-async def adm_edit_pdf_save(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    if data.get("field") != "pdf_file_id":
-        return  # обычный текстовый edit обрабатывается в adm_edit_field_save
-    doc = message.document
-    if doc.mime_type != "application/pdf" and not doc.file_name.lower().endswith(".pdf"):
-        await message.answer("❌ Это не PDF. Пришли PDF-файл:", reply_markup=cancel_keyboard())
-        return
-    update_nutrition_lecture(data["item_id"], "pdf_file_id", doc.file_id)
-    update_nutrition_lecture(data["item_id"], "pdf_filename", doc.file_name)
-    await state.clear()
-    await message.answer(
-        "✅ PDF обновлён!",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ К списку лекций", callback_data="adm:edit_lecture_list")],
             [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
         ])
     )
