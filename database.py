@@ -136,6 +136,21 @@ def add_permanent_workout(title, description, video_url, duration):
         )
 
 
+def get_permanent_workout(workout_id):
+    with get_db() as conn:
+        return conn.execute('SELECT * FROM permanent_workouts WHERE id=?', (workout_id,)).fetchone()
+
+
+def update_permanent_workout(workout_id, field, value):
+    with get_db() as conn:
+        conn.execute(f'UPDATE permanent_workouts SET {field}=? WHERE id=?', (value, workout_id))
+
+
+def delete_permanent_workout(workout_id):
+    with get_db() as conn:
+        conn.execute('DELETE FROM permanent_workouts WHERE id=?', (workout_id,))
+
+
 def get_active_weekly_workouts():
     with get_db() as conn:
         month_ago = (datetime.now() - timedelta(days=30)).date()
@@ -185,6 +200,21 @@ def cleanup_old_workouts():
         return deleted
 
 
+def get_weekly_workout(workout_id):
+    with get_db() as conn:
+        return conn.execute('SELECT * FROM weekly_workouts WHERE id=?', (workout_id,)).fetchone()
+
+
+def update_weekly_workout(workout_id, field, value):
+    with get_db() as conn:
+        conn.execute(f'UPDATE weekly_workouts SET {field}=? WHERE id=?', (value, workout_id))
+
+
+def delete_weekly_workout(workout_id):
+    with get_db() as conn:
+        conn.execute('DELETE FROM weekly_workouts WHERE id=?', (workout_id,))
+
+
 def mark_workout_done(user_id, workout_id, workout_type):
     with get_db() as conn:
         conn.execute(
@@ -222,6 +252,11 @@ def add_nutrition_lecture(title, description, video_url, pdf_file_id=None, pdf_f
             'INSERT INTO nutrition_lectures (title, description, video_url, pdf_file_id, pdf_filename, order_num) VALUES (?,?,?,?,?,?)',
             (title, description, video_url, pdf_file_id, pdf_filename, order_num)
         )
+
+
+def update_nutrition_lecture(lecture_id, field, value):
+    with get_db() as conn:
+        conn.execute(f'UPDATE nutrition_lectures SET {field}=? WHERE id=?', (value, lecture_id))
 
 
 def delete_nutrition_lecture(lecture_id):
