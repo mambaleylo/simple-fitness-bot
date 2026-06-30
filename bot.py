@@ -23,7 +23,10 @@ from database import (
     has_completed_workout, mark_workout_done, cleanup_old_workouts,
     add_weekly_workouts, add_permanent_workout, get_all_users, get_db,
     get_nutrition_lectures, get_nutrition_lecture, add_nutrition_lecture,
-    delete_nutrition_lecture, get_next_unsent_workout, mark_workout_sent
+    delete_nutrition_lecture, get_next_unsent_workout, mark_workout_sent,
+    get_permanent_workout, update_permanent_workout, delete_permanent_workout,
+    get_weekly_workout, update_weekly_workout, delete_weekly_workout,
+    update_nutrition_lecture
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -61,6 +64,9 @@ class AddLectureState(StatesGroup):
     url = State()
     pdf = State()
 
+class EditFieldState(StatesGroup):
+    waiting_value = State()
+
 
 # ========== KEYBOARDS ==========
 
@@ -85,6 +91,9 @@ def admin_menu():
         [InlineKeyboardButton(text="🏋️ Добавить закреплённую", callback_data="adm:add_permanent")],
         [InlineKeyboardButton(text="📅 Добавить тренировку месяца", callback_data="adm:add_weekly")],
         [InlineKeyboardButton(text="🍎 Добавить лекцию по питанию", callback_data="adm:add_lecture")],
+        [InlineKeyboardButton(text="✏️ Редактировать закреплённые", callback_data="adm:edit_permanent_list")],
+        [InlineKeyboardButton(text="✏️ Редактировать тренировки месяца", callback_data="adm:edit_weekly_list")],
+        [InlineKeyboardButton(text="✏️ Редактировать лекции", callback_data="adm:edit_lecture_list")],
         [InlineKeyboardButton(text="✅ Активировать подписку", callback_data="adm:activate")],
         [InlineKeyboardButton(text="👥 Список пользователей", callback_data="adm:users")],
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="adm:broadcast")],
@@ -793,6 +802,227 @@ async def al_pdf_text(message: types.Message, state: FSMContext):
             "📄 Пришли PDF-файл как документ, или напиши <code>нет</code>:",
             reply_markup=cancel_keyboard(), parse_mode="HTML"
         )
+
+
+# ========== РЕДАКТИРОВАНИЕ КОНТЕНТА (закреплённые/месяц/лекции) ==========
+# content_type: "permanent" | "weekly" | "lecture"
+
+CONTENT_CONFIG = {
+    "permanent": {
+        "title": "Закреплённые тренировки",
+        "get_list": get_permanent_workouts,
+        "get_one": get_permanent_workout,
+        "update": update_permanent_workout,
+        "delete": delete_permanent_workout,
+        "fields": [("title", "Название"), ("description", "Описание"),
+                   ("video_url", "Ссылка на видео"), ("duration", "Длительность (мин)")],
+    },
+    "weekly": {
+        "title": "Тренировки месяца",
+        "get_list": get_active_weekly_workouts,
+        "get_one": get_weekly_workout,
+        "update": update_weekly_workout,
+        "delete": delete_weekly_workout,
+        "fields": [("title", "Название"), ("description", "Описание"),
+                   ("video_url", "Ссылка на видео"), ("duration", "Длительность (мин)")],
+    },
+    "lecture": {
+        "title": "Лекции по питанию",
+        "get_list": get_nutrition_lectures,
+        "get_one": get_nutrition_lecture,
+        "update": update_nutrition_lecture,
+        "delete": delete_nutrition_lecture,
+        "fields": [("title", "Название"), ("description", "Описание"),
+                   ("video_url", "Ссылка на видео")],
+    },
+}
+
+
+@dp.callback_query(F.data.startswith("adm:edit_") & F.data.endswith("_list"))
+async def adm_edit_list(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    content_type = callback.data.replace("adm:edit_", "").replace("_list", "")
+    cfg = CONTENT_CONFIG[content_type]
+    items = cfg["get_list"]()
+    if not items:
+        await callback.message.edit_text(
+            f"📭 «{cfg['title']}» — пока пусто.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+            ])
+        )
+        await callback.answer()
+        return
+
+    buttons = [
+        [InlineKeyboardButton(text=f"✏️ {item['title']}", callback_data=f"adm:edit_item:{content_type}:{item['id']}")]
+        for item in items
+    ]
+    buttons.append([InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")])
+    await callback.message.edit_text(
+        f"✏️ <b>{cfg['title']}</b>\n\nВыбери, что отредактировать:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("adm:edit_item:"))
+async def adm_edit_item(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    _, _, content_type, item_id = callback.data.split(":")
+    item_id = int(item_id)
+    cfg = CONTENT_CONFIG[content_type]
+    item = cfg["get_one"](item_id)
+    if not item:
+        await callback.answer("Не найдено")
+        return
+
+    text = f"✏️ <b>{item['title']}</b>\n\n📝 {item['description']}\n"
+    if item["video_url"]:
+        text += f"\n🎥 {item['video_url']}"
+
+    buttons = []
+    for field, label in cfg["fields"]:
+        buttons.append([InlineKeyboardButton(
+            text=f"Изменить: {label}",
+            callback_data=f"adm:edit_field:{content_type}:{item_id}:{field}"
+        )])
+    if content_type == "lecture":
+        buttons.append([InlineKeyboardButton(
+            text="📄 Заменить PDF", callback_data=f"adm:edit_pdf:{item_id}"
+        )])
+    buttons.append([InlineKeyboardButton(
+        text="🗑️ Удалить", callback_data=f"adm:delete_item:{content_type}:{item_id}"
+    )])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"adm:edit_{content_type}_list")])
+
+    await callback.message.edit_text(
+        text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("adm:edit_field:"))
+async def adm_edit_field_start(callback: types.CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    _, _, content_type, item_id, field = callback.data.split(":")
+    cfg = CONTENT_CONFIG[content_type]
+    label = dict(cfg["fields"])[field]
+
+    await state.set_state(EditFieldState.waiting_value)
+    await state.update_data(content_type=content_type, item_id=int(item_id), field=field)
+    await callback.message.edit_text(
+        f"Введи новое значение для поля «<b>{label}</b>»:",
+        reply_markup=cancel_keyboard(), parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@dp.message(EditFieldState.waiting_value)
+async def adm_edit_field_save(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    content_type = data["content_type"]
+    item_id = data["item_id"]
+    field = data["field"]
+    cfg = CONTENT_CONFIG[content_type]
+
+    value = message.text.strip()
+    if field == "duration":
+        try:
+            value = int(value)
+        except ValueError:
+            await message.answer("❌ Длительность должна быть числом. Попробуй ещё раз:", reply_markup=cancel_keyboard())
+            return
+    if field == "video_url" and value.lower() in ("нет", "no", "-"):
+        value = None
+
+    cfg["update"](item_id, field, value)
+    await state.clear()
+    await message.answer(
+        "✅ Изменения сохранены!",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ К списку", callback_data=f"adm:edit_{content_type}_list")],
+            [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+        ])
+    )
+
+
+@dp.callback_query(F.data.startswith("adm:edit_pdf:"))
+async def adm_edit_pdf_start(callback: types.CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    item_id = int(callback.data.split(":")[2])
+    await state.set_state(EditFieldState.waiting_value)
+    await state.update_data(content_type="lecture", item_id=item_id, field="pdf_file_id")
+    await callback.message.edit_text(
+        "📄 Пришли новый PDF-файл как документ:",
+        reply_markup=cancel_keyboard()
+    )
+    await callback.answer()
+
+
+@dp.message(EditFieldState.waiting_value, F.document)
+async def adm_edit_pdf_save(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    if data.get("field") != "pdf_file_id":
+        return  # обычный текстовый edit обрабатывается в adm_edit_field_save
+    doc = message.document
+    if doc.mime_type != "application/pdf" and not doc.file_name.lower().endswith(".pdf"):
+        await message.answer("❌ Это не PDF. Пришли PDF-файл:", reply_markup=cancel_keyboard())
+        return
+    update_nutrition_lecture(data["item_id"], "pdf_file_id", doc.file_id)
+    update_nutrition_lecture(data["item_id"], "pdf_filename", doc.file_name)
+    await state.clear()
+    await message.answer(
+        "✅ PDF обновлён!",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ К списку лекций", callback_data="adm:edit_lecture_list")],
+            [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+        ])
+    )
+
+
+@dp.callback_query(F.data.startswith("adm:delete_item:"))
+async def adm_delete_item_confirm(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    _, _, content_type, item_id = callback.data.split(":")
+    await callback.message.edit_text(
+        "⚠️ Точно удалить? Это необратимо.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"adm:delete_confirm:{content_type}:{item_id}")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"adm:edit_item:{content_type}:{item_id}")]
+        ])
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("adm:delete_confirm:"))
+async def adm_delete_item_do(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    _, _, content_type, item_id = callback.data.split(":")
+    item_id = int(item_id)
+    cfg = CONTENT_CONFIG[content_type]
+    cfg["delete"](item_id)
+    await callback.message.edit_text(
+        "🗑️ Удалено.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ К списку", callback_data=f"adm:edit_{content_type}_list")],
+            [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+        ])
+    )
+    await callback.answer("Удалено")
 
 
 # --- Рассылка ---
