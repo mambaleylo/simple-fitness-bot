@@ -2,7 +2,10 @@ import sqlite3
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 
-DB_NAME = "fitbot.db"
+import os
+DATA_DIR = os.getenv("DATA_DIR", ".")
+os.makedirs(DATA_DIR, exist_ok=True)
+DB_NAME = os.path.join(DATA_DIR, "fitbot.db")
 
 
 @contextmanager
@@ -66,6 +69,7 @@ def init_db():
                 video_url TEXT,
                 pdf_file_id TEXT,
                 pdf_filename TEXT,
+                pdf_url TEXT,
                 order_num INTEGER
             )
         ''')
@@ -244,13 +248,13 @@ def get_nutrition_lecture(lecture_id):
         return conn.execute('SELECT * FROM nutrition_lectures WHERE id=?', (lecture_id,)).fetchone()
 
 
-def add_nutrition_lecture(title, description, video_url, pdf_file_id=None, pdf_filename=None):
+def add_nutrition_lecture(title, description, video_url, pdf_file_id=None, pdf_filename=None, pdf_url=None):
     with get_db() as conn:
         row = conn.execute('SELECT COALESCE(MAX(order_num), 0) + 1 AS n FROM nutrition_lectures').fetchone()
         order_num = row['n']
         conn.execute(
-            'INSERT INTO nutrition_lectures (title, description, video_url, pdf_file_id, pdf_filename, order_num) VALUES (?,?,?,?,?,?)',
-            (title, description, video_url, pdf_file_id, pdf_filename, order_num)
+            'INSERT INTO nutrition_lectures (title, description, video_url, pdf_file_id, pdf_filename, pdf_url, order_num) VALUES (?,?,?,?,?,?,?)',
+            (title, description, video_url, pdf_file_id, pdf_filename, pdf_url, order_num)
         )
 
 
