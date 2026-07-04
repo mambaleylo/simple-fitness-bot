@@ -262,11 +262,12 @@ async def cb_show_lecture(callback: types.CallbackQuery):
     buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="lectures")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    if lecture.get("gif_file_id"):
+    gif_id = lecture["gif_file_id"] if "gif_file_id" in lecture.keys() else None
+    if gif_id:
         await callback.message.delete()
         await bot.send_animation(
             callback.from_user.id,
-            lecture["gif_file_id"],
+            gif_id,
             caption=text,
             reply_markup=kb,
             parse_mode="HTML"
