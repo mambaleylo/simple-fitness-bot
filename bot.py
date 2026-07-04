@@ -253,16 +253,15 @@ async def cb_show_lecture(callback: types.CallbackQuery):
     text = f"🍎 <b>{lecture['title']}</b>\n\n"
     if lecture["description"]:
         text += f"📝 {lecture['description']}\n"
+
+    buttons = []
     if lecture["video_url"]:
-        text += f"\n🎥 <a href=\"{lecture['video_url']}\">Смотреть видео</a>"
+        buttons.append([InlineKeyboardButton(text="🎥 Смотреть видео", url=lecture["video_url"])])
     if lecture["pdf_url"]:
-        text += f"\n📄 <a href=\"{lecture['pdf_url']}\">Открыть PDF-материал</a>"
+        buttons.append([InlineKeyboardButton(text="📄 Открыть PDF", url=lecture["pdf_url"])])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="lectures")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="lectures")]
-    ])
-
-    # Если есть GIF — отправляем анимацию отдельным сообщением перед текстом
     if lecture.get("gif_file_id"):
         await callback.message.delete()
         await bot.send_animation(
@@ -298,10 +297,10 @@ async def cb_show_workout(callback: types.CallbackQuery):
     if done:
         text += "✅ <i>Вы уже выполнили эту тренировку</i>\n\n"
     text += f"📝 {workout['description']}\n\n" if workout['description'] else ""
-    if workout["video_url"]:
-        text += f"\n🎥 <a href=\"{workout['video_url']}\">Смотреть видео</a>"
 
     buttons = []
+    if workout["video_url"]:
+        buttons.append([InlineKeyboardButton(text="🎥 Смотреть видео", url=workout["video_url"])])
     if not done:
         buttons.append([InlineKeyboardButton(text="✅ Отметить выполненным", callback_data=f"done:{workout_type}:{workout_id}")])
     back_target = "permanent" if workout_type == "permanent" else "weekly"
