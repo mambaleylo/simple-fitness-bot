@@ -733,41 +733,20 @@ async def adm_add_lecture_start(callback: types.CallbackQuery, state: FSMContext
 
 @dp.message(AddLectureState.url)
 async def al_url(message: types.Message, state: FSMContext):
-    import re, urllib.parse
     url = message.text.strip() if message.text else ""
-    # Автоматически извлекаем имя из ссылки (последний сегмент пути или query param)
-    try:
-        parsed = urllib.parse.urlparse(url)
-        path_part = parsed.path.rstrip("/").split("/")[-1]
-        # Убираем расширение файла если есть
-        name_from_url = re.sub(r'\.[a-zA-Z0-9]+$', '', path_part).replace('-', ' ').replace('_', ' ').strip()
-        auto_title = name_from_url[:60] if name_from_url else ""
-    except Exception:
-        auto_title = ""
-
-    await state.update_data(video_url=url if url else None, auto_title=auto_title)
+    await state.update_data(video_url=url if url else None)
     await state.set_state(AddLectureState.title)
-
-    hint = f"\n\n<i>Из ссылки получено: «{auto_title}»</i>" if auto_title else ""
     await message.answer(
-        f"Введи <b>название</b> лекции{hint}\n\n"
-        "Или нажми «⏭️ Пропустить» чтобы использовать авто-название из ссылки:",
-        reply_markup=skip_keyboard(), parse_mode="HTML"
+        "Введи <b>название</b> лекции\n\n"
+        "<i>Например: «Видео 2, кбжу»</i>",
+        reply_markup=cancel_keyboard(), parse_mode="HTML"
     )
 
 
 @dp.callback_query(F.data == "adm:lec_skip", AddLectureState.title)
 async def al_title_skip(callback: types.CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    title = data.get("auto_title") or "Лекция"
-    await state.update_data(title=title)
-    await state.set_state(AddLectureState.description)
-    await callback.message.edit_text(
-        f"Название: «<b>{title}</b>»\n\n"
-        "Введи <b>описание</b> лекции или нажми «⏭️ Пропустить»:",
-        reply_markup=skip_keyboard(), parse_mode="HTML"
-    )
-    await callback.answer()
+    # Кнопка пропуска на шаге title не нужна — убираем её, но обработчик оставим на всякий случай
+    await callback.answer("Введи название вручную", show_alert=True)
 
 
 @dp.message(AddLectureState.title)
