@@ -493,12 +493,14 @@ async def adm_users(callback: types.CallbackQuery):
     active = sum(1 for u in users if is_subscribed(u["user_id"]))
     lines = []
     for u in users[:30]:
-        sub = u["subscribed_until"] or "—"
         name = f"@{u['username']}" if u["username"] else str(u["user_id"])
-        icon = "⭐" if is_subscribed(u["user_id"]) else "👤"
-        lines.append(f"{icon} {name} — до {sub}")
+        if is_subscribed(u["user_id"]):
+            days_left = get_subscription_days_left(u["user_id"])
+            lines.append(f"⭐ {name} — осталось <b>{days_left} дн.</b> (до {u['subscribed_until']})")
+        else:
+            lines.append(f"👤 {name} — без подписки")
 
-    text = f"👥 <b>Пользователи: {total}</b> (активных: {active})\n\n" + "\n".join(lines)
+    text = f"👥 <b>Пользователи: {total}</b> (активных подписок: {active})\n\n" + "\n".join(lines)
     if total > 30:
         text += f"\n\n... и ещё {total - 30}"
 
@@ -555,6 +557,7 @@ async def adm_activate_uid(message: types.Message, state: FSMContext):
             f"Пользователь: <code>{uid}</code>\n\nНа сколько дней?",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [
+                    InlineKeyboardButton(text="1 день", callback_data="adm:days:1"),
                     InlineKeyboardButton(text="30 дней", callback_data="adm:days:30"),
                     InlineKeyboardButton(text="60 дней", callback_data="adm:days:60"),
                     InlineKeyboardButton(text="90 дней", callback_data="adm:days:90"),
