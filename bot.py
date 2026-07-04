@@ -706,48 +706,95 @@ async def aw_url(message: types.Message, state: FSMContext):
 
 # --- Добавить лекцию по питанию ---
 
+def skip_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏭️ Пропустить", callback_data="adm:lec_skip")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="adm:cancel")],
+    ])
+
+
 @dp.callback_query(F.data == "adm:add_lecture")
 async def adm_add_lecture_start(callback: types.CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer()
         return
-    await state.set_state(AddLectureState.title)
+    await state.set_state(AddLectureState.url)
     await callback.message.edit_text(
-        "🍎 <b>Новая лекция по питанию</b>\n\nВведи <b>название</b> лекции:",
+        "🍎 <b>Новая лекция по питанию</b>\n\n"
+        "Пришли <b>ссылку на видео</b> (YouTube, Google Drive и т.д.).\n"
+        "Название лекции будет взято автоматически из ссылки, или введи вручную на следующем шаге.",
         reply_markup=cancel_keyboard(), parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@dp.message(AddLectureState.url)
+async def al_url(message: types.Message, state: FSMContext):
+    import re, urllib.parse
+    url = message.text.strip() if message.text else ""
+    # Автоматически извлекаем имя из ссылки (последний сегмент пути или query param)
+    try:
+        parsed = urllib.parse.urlparse(url)
+        path_part = parsed.path.rstrip("/").split("/")[-1]
+        # Убираем расширение файла если есть
+        name_from_url = re.sub(r'\.[a-zA-Z0-9]+$', '', path_part).replace('-', ' ').replace('_', ' ').strip()
+        auto_title = name_from_url[:60] if name_from_url else ""
+    except Exception:
+        auto_title = ""
+
+    await state.update_data(video_url=url if url else None, auto_title=auto_title)
+    await state.set_state(AddLectureState.title)
+
+    hint = f"\n\n<i>Из ссылки получено: «{auto_title}»</i>" if auto_title else ""
+    await message.answer(
+        f"Введи <b>название</b> лекции{hint}\n\n"
+        "Или нажми «⏭️ Пропустить» чтобы использовать авто-название из ссылки:",
+        reply_markup=skip_keyboard(), parse_mode="HTML"
+    )
+
+
+@dp.callback_query(F.data == "adm:lec_skip", AddLectureState.title)
+async def al_title_skip(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    title = data.get("auto_title") or "Лекция"
+    await state.update_data(title=title)
+    await state.set_state(AddLectureState.description)
+    await callback.message.edit_text(
+        f"Название: «<b>{title}</b>»\n\n"
+        "Введи <b>описание</b> лекции или нажми «⏭️ Пропустить»:",
+        reply_markup=skip_keyboard(), parse_mode="HTML"
     )
     await callback.answer()
 
 
 @dp.message(AddLectureState.title)
 async def al_title(message: types.Message, state: FSMContext):
-    await state.update_data(title=message.text)
+    await state.update_data(title=message.text.strip())
     await state.set_state(AddLectureState.description)
     await message.answer(
-        "Введи <b>описание</b> лекции (или <code>-</code> чтобы пропустить):",
-        reply_markup=cancel_keyboard(), parse_mode="HTML"
+        "Введи <b>описание</b> лекции или нажми «⏭️ Пропустить»:",
+        reply_markup=skip_keyboard(), parse_mode="HTML"
     )
+
+
+@dp.callback_query(F.data == "adm:lec_skip", AddLectureState.description)
+async def al_desc_skip(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(description=None)
+    await state.set_state(AddLectureState.gif)
+    await callback.message.edit_text(
+        "🎞️ Пришли <b>GIF-анимацию</b> для лекции или нажми «⏭️ Пропустить»:",
+        reply_markup=skip_keyboard(), parse_mode="HTML"
+    )
+    await callback.answer()
 
 
 @dp.message(AddLectureState.description)
 async def al_desc(message: types.Message, state: FSMContext):
-    desc = None if message.text.strip() in ("-", "нет", "no") else message.text
-    await state.update_data(description=desc)
-    await state.set_state(AddLectureState.url)
-    await message.answer(
-        "Введи <b>ссылку на видео</b> (или <code>-</code>):",
-        reply_markup=cancel_keyboard(), parse_mode="HTML"
-    )
-
-
-@dp.message(AddLectureState.url)
-async def al_url(message: types.Message, state: FSMContext):
-    url = None if message.text.lower().strip() in ("нет", "no", "-") else message.text.strip()
-    await state.update_data(video_url=url)
+    await state.update_data(description=message.text.strip())
     await state.set_state(AddLectureState.gif)
     await message.answer(
-        "🎞️ Пришли <b>GIF-анимацию</b> для лекции (или напиши <code>-</code> чтобы пропустить):",
-        reply_markup=cancel_keyboard(), parse_mode="HTML"
+        "🎞️ Пришли <b>GIF-анимацию</b> для лекции или нажми «⏭️ Пропустить»:",
+        reply_markup=skip_keyboard(), parse_mode="HTML"
     )
 
 
@@ -756,44 +803,55 @@ async def al_gif_file(message: types.Message, state: FSMContext):
     await state.update_data(gif_file_id=message.animation.file_id)
     await state.set_state(AddLectureState.pdf)
     await message.answer(
-        "📄 Пришли <b>ссылку на Google Drive</b> с PDF (или <code>-</code>):",
-        reply_markup=cancel_keyboard(), parse_mode="HTML"
+        "📄 Пришли <b>ссылку на PDF</b> (Google Drive) или нажми «⏭️ Пропустить»:",
+        reply_markup=skip_keyboard(), parse_mode="HTML"
     )
 
 
-@dp.message(AddLectureState.gif)
-async def al_gif_skip(message: types.Message, state: FSMContext):
+@dp.callback_query(F.data == "adm:lec_skip", AddLectureState.gif)
+async def al_gif_skip(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(gif_file_id=None)
     await state.set_state(AddLectureState.pdf)
-    await message.answer(
-        "📄 Пришли <b>ссылку на Google Drive</b> с PDF (или <code>-</code>):",
-        reply_markup=cancel_keyboard(), parse_mode="HTML"
+    await callback.message.edit_text(
+        "📄 Пришли <b>ссылку на PDF</b> (Google Drive) или нажми «⏭️ Пропустить»:",
+        reply_markup=skip_keyboard(), parse_mode="HTML"
     )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "adm:lec_skip", AddLectureState.pdf)
+async def al_pdf_skip(callback: types.CallbackQuery, state: FSMContext):
+    await _save_lecture(callback.message, state, pdf_url=None, answer_method="edit")
+    await callback.answer()
 
 
 @dp.message(AddLectureState.pdf)
 async def al_pdf_url(message: types.Message, state: FSMContext):
-    text = message.text.strip() if message.text else ""
-    pdf_url = None if text.lower() in ("нет", "no", "-") else text
-    data = await state.get_data()
-    # Автоимя файла на основе названия лекции
+    pdf_url = message.text.strip() if message.text else None
+    await _save_lecture(message, state, pdf_url=pdf_url, answer_method="answer")
+
+
+async def _save_lecture(target, state: FSMContext, pdf_url, answer_method="answer"):
     import re
-    safe_name = re.sub(r'[^\w\s-]', '', data["title"]).strip().replace(' ', '_')
+    data = await state.get_data()
+    title = data.get("title") or "Лекция"
+    safe_name = re.sub(r'[^\w\s-]', '', title).strip().replace(' ', '_')
     pdf_filename = f"{safe_name}.pdf" if pdf_url else None
     add_nutrition_lecture(
-        data["title"], data["description"], data["video_url"],
-        pdf_url=pdf_url,
+        title, data.get("description"), data.get("video_url"),
+        pdf_url=pdf_url, pdf_filename=pdf_filename,
         gif_file_id=data.get("gif_file_id")
     )
     await state.clear()
     suffix = " со ссылкой на PDF" if pdf_url else " (без PDF)"
-    await message.answer(
-        f"✅ Лекция «<b>{data['title']}</b>» добавлена{suffix}!",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
-        ]),
-        parse_mode="HTML"
-    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+    ])
+    text = f"✅ Лекция «<b>{title}</b>» добавлена{suffix}!"
+    if answer_method == "edit":
+        await target.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await target.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 # ========== РЕДАКТИРОВАНИЕ КОНТЕНТА (закреплённые/месяц/лекции) ==========
