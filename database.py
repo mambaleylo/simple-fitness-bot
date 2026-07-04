@@ -70,6 +70,7 @@ def init_db():
                 pdf_file_id TEXT,
                 pdf_filename TEXT,
                 pdf_url TEXT,
+                gif_file_id TEXT,
                 order_num INTEGER
             )
         ''')
@@ -248,13 +249,13 @@ def get_nutrition_lecture(lecture_id):
         return conn.execute('SELECT * FROM nutrition_lectures WHERE id=?', (lecture_id,)).fetchone()
 
 
-def add_nutrition_lecture(title, description, video_url, pdf_file_id=None, pdf_filename=None, pdf_url=None):
+def add_nutrition_lecture(title, description, video_url, pdf_file_id=None, pdf_filename=None, pdf_url=None, gif_file_id=None):
     with get_db() as conn:
         row = conn.execute('SELECT COALESCE(MAX(order_num), 0) + 1 AS n FROM nutrition_lectures').fetchone()
         order_num = row['n']
         conn.execute(
-            'INSERT INTO nutrition_lectures (title, description, video_url, pdf_file_id, pdf_filename, pdf_url, order_num) VALUES (?,?,?,?,?,?,?)',
-            (title, description, video_url, pdf_file_id, pdf_filename, pdf_url, order_num)
+            'INSERT INTO nutrition_lectures (title, description, video_url, pdf_file_id, pdf_filename, pdf_url, gif_file_id, order_num) VALUES (?,?,?,?,?,?,?,?)',
+            (title, description, video_url, pdf_file_id, pdf_filename, pdf_url, gif_file_id, order_num)
         )
 
 
