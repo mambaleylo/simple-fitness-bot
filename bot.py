@@ -43,13 +43,11 @@ class AddPermanentState(StatesGroup):
     title = State()
     description = State()
     url = State()
-    duration = State()
 
 class AddWeeklyState(StatesGroup):
     title = State()
     description = State()
     url = State()
-    duration = State()
 
 class BroadcastState(StatesGroup):
     text = State()
@@ -62,6 +60,7 @@ class AddLectureState(StatesGroup):
     title = State()
     description = State()
     url = State()
+    gif = State()
     pdf = State()
 
 class EditFieldState(StatesGroup):
@@ -107,7 +106,7 @@ def workout_list_keyboard(workouts, workout_type, user_id):
         done = has_completed_workout(user_id, w["id"], workout_type)
         status = "✅ " if done else "◻️ "
         buttons.append([InlineKeyboardButton(
-            text=f"{status}{w['title']} ({w['duration']} мин)",
+            text=f"{status}{w['title']}",
             callback_data=f"wk:{workout_type}:{w['id']}"
         )])
     buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back")])
@@ -188,7 +187,7 @@ async def cb_permanent(callback: types.CallbackQuery):
         await callback.answer()
         return
     text = "🏋️ <b>Закреплённые тренировки</b> (доступны всегда):\n\n"
-    text += "\n".join(f"• {w['title']} — {w['duration']} мин" for w in workouts)
+    text += "\n".join(f"• {w['title']}" for w in workouts)
     await callback.message.edit_text(text, reply_markup=workout_list_keyboard(workouts, "permanent", uid), parse_mode="HTML")
     await callback.answer()
 
@@ -208,7 +207,7 @@ async def cb_weekly(callback: types.CallbackQuery):
         await callback.answer()
         return
     text = "📅 <b>Тренировки этого месяца:</b>\n\n"
-    text += "\n".join(f"• {w['title']} — {w['duration']} мин (неделя {w['week_number']})" for w in workouts)
+    text += "\n".join(f"• {w['title']} (неделя {w['week_number']})" for w in workouts)
     await callback.message.edit_text(text, reply_markup=workout_list_keyboard(workouts, "weekly", uid), parse_mode="HTML")
     await callback.answer()
 
@@ -251,19 +250,30 @@ async def cb_show_lecture(callback: types.CallbackQuery):
         await callback.answer("Лекция не найдена")
         return
 
-    text = f"🍎 <b>{lecture['title']}</b>\n\n📝 {lecture['description']}\n"
+    text = f"🍎 <b>{lecture['title']}</b>\n\n"
+    if lecture["description"]:
+        text += f"📝 {lecture['description']}\n"
     if lecture["video_url"]:
         text += f"\n🎥 <a href=\"{lecture['video_url']}\">Смотреть видео</a>"
     if lecture["pdf_url"]:
         text += f"\n📄 <a href=\"{lecture['pdf_url']}\">Открыть PDF-материал</a>"
 
-    await callback.message.edit_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ Назад", callback_data="lectures")]
-        ]),
-        parse_mode="HTML"
-    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="lectures")]
+    ])
+
+    # Если есть GIF — отправляем анимацию отдельным сообщением перед текстом
+    if lecture.get("gif_file_id"):
+        await callback.message.delete()
+        await bot.send_animation(
+            callback.from_user.id,
+            lecture["gif_file_id"],
+            caption=text,
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
+    else:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 
@@ -287,7 +297,7 @@ async def cb_show_workout(callback: types.CallbackQuery):
     text = f"🏋️ <b>{workout['title']}</b>\n\n"
     if done:
         text += "✅ <i>Вы уже выполнили эту тренировку</i>\n\n"
-    text += f"📝 {workout['description']}\n\n⏱️ Длительность: {workout['duration']} мин\n"
+    text += f"📝 {workout['description']}\n\n" if workout['description'] else ""
     if workout["video_url"]:
         text += f"\n🎥 <a href=\"{workout['video_url']}\">Смотреть видео</a>"
 
@@ -605,33 +615,28 @@ async def adm_add_perm_start(callback: types.CallbackQuery, state: FSMContext):
 async def ap_title(message: types.Message, state: FSMContext):
     await state.update_data(title=message.text)
     await state.set_state(AddPermanentState.description)
-    await message.answer("Введи <b>описание</b>:", reply_markup=cancel_keyboard(), parse_mode="HTML")
+    await message.answer(
+        "Введи <b>описание</b> (или <code>-</code> чтобы пропустить):",
+        reply_markup=cancel_keyboard(), parse_mode="HTML"
+    )
 
 
 @dp.message(AddPermanentState.description)
 async def ap_desc(message: types.Message, state: FSMContext):
-    await state.update_data(description=message.text)
+    desc = None if message.text.strip() in ("-", "нет", "no") else message.text
+    await state.update_data(description=desc)
     await state.set_state(AddPermanentState.url)
-    await message.answer("Введи <b>ссылку на видео</b> (или <code>нет</code>):", reply_markup=cancel_keyboard(), parse_mode="HTML")
+    await message.answer(
+        "Введи <b>ссылку на видео</b> (или <code>-</code>):",
+        reply_markup=cancel_keyboard(), parse_mode="HTML"
+    )
 
 
 @dp.message(AddPermanentState.url)
 async def ap_url(message: types.Message, state: FSMContext):
     url = None if message.text.lower().strip() in ("нет", "no", "-") else message.text.strip()
-    await state.update_data(video_url=url)
-    await state.set_state(AddPermanentState.duration)
-    await message.answer("Введи <b>длительность</b> в минутах:", reply_markup=cancel_keyboard(), parse_mode="HTML")
-
-
-@dp.message(AddPermanentState.duration)
-async def ap_duration(message: types.Message, state: FSMContext):
-    try:
-        duration = int(message.text.strip())
-    except ValueError:
-        await message.answer("❌ Введи число:", reply_markup=cancel_keyboard())
-        return
     data = await state.get_data()
-    add_permanent_workout(data["title"], data["description"], data["video_url"], duration)
+    add_permanent_workout(data["title"], data["description"], url, 0)
     await state.clear()
     await message.answer(
         f"✅ Тренировка «<b>{data['title']}</b>» добавлена!",
@@ -640,6 +645,7 @@ async def ap_duration(message: types.Message, state: FSMContext):
         ]),
         parse_mode="HTML"
     )
+
 
 
 # --- Добавить тренировку месяца ---
@@ -661,37 +667,32 @@ async def adm_add_weekly_start(callback: types.CallbackQuery, state: FSMContext)
 async def aw_title(message: types.Message, state: FSMContext):
     await state.update_data(title=message.text)
     await state.set_state(AddWeeklyState.description)
-    await message.answer("Введи <b>описание</b>:", reply_markup=cancel_keyboard(), parse_mode="HTML")
+    await message.answer(
+        "Введи <b>описание</b> (или <code>-</code> чтобы пропустить):",
+        reply_markup=cancel_keyboard(), parse_mode="HTML"
+    )
 
 
 @dp.message(AddWeeklyState.description)
 async def aw_desc(message: types.Message, state: FSMContext):
-    await state.update_data(description=message.text)
+    desc = None if message.text.strip() in ("-", "нет", "no") else message.text
+    await state.update_data(description=desc)
     await state.set_state(AddWeeklyState.url)
-    await message.answer("Введи <b>ссылку на видео</b> (или <code>нет</code>):", reply_markup=cancel_keyboard(), parse_mode="HTML")
+    await message.answer(
+        "Введи <b>ссылку на видео</b> (или <code>-</code>):",
+        reply_markup=cancel_keyboard(), parse_mode="HTML"
+    )
 
 
 @dp.message(AddWeeklyState.url)
 async def aw_url(message: types.Message, state: FSMContext):
     url = None if message.text.lower().strip() in ("нет", "no", "-") else message.text.strip()
-    await state.update_data(video_url=url)
-    await state.set_state(AddWeeklyState.duration)
-    await message.answer("Введи <b>длительность</b> в минутах:", reply_markup=cancel_keyboard(), parse_mode="HTML")
-
-
-@dp.message(AddWeeklyState.duration)
-async def aw_duration(message: types.Message, state: FSMContext):
-    try:
-        duration = int(message.text.strip())
-    except ValueError:
-        await message.answer("❌ Введи число:", reply_markup=cancel_keyboard())
-        return
     data = await state.get_data()
     add_weekly_workouts([{
         "title": data["title"],
         "description": data["description"],
-        "video_url": data["video_url"],
-        "duration": duration
+        "video_url": url,
+        "duration": 0
     }])
     await state.clear()
     await message.answer(
@@ -722,15 +723,19 @@ async def adm_add_lecture_start(callback: types.CallbackQuery, state: FSMContext
 async def al_title(message: types.Message, state: FSMContext):
     await state.update_data(title=message.text)
     await state.set_state(AddLectureState.description)
-    await message.answer("Введи <b>описание</b> лекции:", reply_markup=cancel_keyboard(), parse_mode="HTML")
+    await message.answer(
+        "Введи <b>описание</b> лекции (или <code>-</code> чтобы пропустить):",
+        reply_markup=cancel_keyboard(), parse_mode="HTML"
+    )
 
 
 @dp.message(AddLectureState.description)
 async def al_desc(message: types.Message, state: FSMContext):
-    await state.update_data(description=message.text)
+    desc = None if message.text.strip() in ("-", "нет", "no") else message.text
+    await state.update_data(description=desc)
     await state.set_state(AddLectureState.url)
     await message.answer(
-        "Введи <b>ссылку на видео</b> (если есть), или напиши <code>нет</code>:",
+        "Введи <b>ссылку на видео</b> (или <code>-</code>):",
         reply_markup=cancel_keyboard(), parse_mode="HTML"
     )
 
@@ -739,12 +744,29 @@ async def al_desc(message: types.Message, state: FSMContext):
 async def al_url(message: types.Message, state: FSMContext):
     url = None if message.text.lower().strip() in ("нет", "no", "-") else message.text.strip()
     await state.update_data(video_url=url)
+    await state.set_state(AddLectureState.gif)
+    await message.answer(
+        "🎞️ Пришли <b>GIF-анимацию</b> для лекции (или напиши <code>-</code> чтобы пропустить):",
+        reply_markup=cancel_keyboard(), parse_mode="HTML"
+    )
+
+
+@dp.message(AddLectureState.gif, F.animation)
+async def al_gif_file(message: types.Message, state: FSMContext):
+    await state.update_data(gif_file_id=message.animation.file_id)
     await state.set_state(AddLectureState.pdf)
     await message.answer(
-        "📄 Пришли <b>ссылку на Google Drive</b> с PDF-файлом, "
-        "или напиши <code>нет</code>, если файла не будет:\n\n"
-        "<i>Ссылка хранится у тебя в Google Drive, поэтому файл никогда не потеряется, "
-        "даже если бот будет переустановлен.</i>",
+        "📄 Пришли <b>ссылку на Google Drive</b> с PDF (или <code>-</code>):",
+        reply_markup=cancel_keyboard(), parse_mode="HTML"
+    )
+
+
+@dp.message(AddLectureState.gif)
+async def al_gif_skip(message: types.Message, state: FSMContext):
+    await state.update_data(gif_file_id=None)
+    await state.set_state(AddLectureState.pdf)
+    await message.answer(
+        "📄 Пришли <b>ссылку на Google Drive</b> с PDF (или <code>-</code>):",
         reply_markup=cancel_keyboard(), parse_mode="HTML"
     )
 
@@ -754,7 +776,15 @@ async def al_pdf_url(message: types.Message, state: FSMContext):
     text = message.text.strip() if message.text else ""
     pdf_url = None if text.lower() in ("нет", "no", "-") else text
     data = await state.get_data()
-    add_nutrition_lecture(data["title"], data["description"], data["video_url"], pdf_url=pdf_url)
+    # Автоимя файла на основе названия лекции
+    import re
+    safe_name = re.sub(r'[^\w\s-]', '', data["title"]).strip().replace(' ', '_')
+    pdf_filename = f"{safe_name}.pdf" if pdf_url else None
+    add_nutrition_lecture(
+        data["title"], data["description"], data["video_url"],
+        pdf_url=pdf_url,
+        gif_file_id=data.get("gif_file_id")
+    )
     await state.clear()
     suffix = " со ссылкой на PDF" if pdf_url else " (без PDF)"
     await message.answer(
@@ -777,7 +807,7 @@ CONTENT_CONFIG = {
         "update": update_permanent_workout,
         "delete": delete_permanent_workout,
         "fields": [("title", "Название"), ("description", "Описание"),
-                   ("video_url", "Ссылка на видео"), ("duration", "Длительность (мин)")],
+                   ("video_url", "Ссылка на видео")],
     },
     "weekly": {
         "title": "Тренировки месяца",
@@ -786,7 +816,7 @@ CONTENT_CONFIG = {
         "update": update_weekly_workout,
         "delete": delete_weekly_workout,
         "fields": [("title", "Название"), ("description", "Описание"),
-                   ("video_url", "Ссылка на видео"), ("duration", "Длительность (мин)")],
+                   ("video_url", "Ссылка на видео")],
     },
     "lecture": {
         "title": "Лекции по питанию",
@@ -795,7 +825,7 @@ CONTENT_CONFIG = {
         "update": update_nutrition_lecture,
         "delete": delete_nutrition_lecture,
         "fields": [("title", "Название"), ("description", "Описание"),
-                   ("video_url", "Ссылка на видео"), ("pdf_url", "Ссылка на PDF (Google Drive)")],
+                   ("video_url", "Ссылка на видео"), ("pdf_url", "Ссылка на PDF (Google Drive)"), ("gif_file_id", "GIF-анимация (file_id)")],
     },
 }
 
@@ -1018,8 +1048,7 @@ async def send_tomorrow_workout():
     users = get_all_users()
     text = (
         f"🌙 <b>Тренировка на завтра готова!</b>\n\n"
-        f"🏋️ {workout['title']}\n"
-        f"⏱️ {workout['duration']} мин\n\n"
+        f"🏋️ {workout['title']}\n\n"
         "Открой меню, чтобы посмотреть подробности 💪"
     )
     count = 0
