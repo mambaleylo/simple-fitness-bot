@@ -60,7 +60,6 @@ def init_db():
                 PRIMARY KEY (user_id, workout_id, workout_type)
             )
         ''')
-        # Лекции по питанию — доступны всем бесплатно, без привязки к подписке
         conn.execute('''
             CREATE TABLE IF NOT EXISTS nutrition_lectures (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,6 +73,18 @@ def init_db():
                 order_num INTEGER
             )
         ''')
+
+        # Миграции — добавляем недостающие колонки в уже существующие таблицы
+        migrations = [
+            ("nutrition_lectures", "pdf_url",    "ALTER TABLE nutrition_lectures ADD COLUMN pdf_url TEXT"),
+            ("nutrition_lectures", "gif_file_id","ALTER TABLE nutrition_lectures ADD COLUMN gif_file_id TEXT"),
+            ("nutrition_lectures", "pdf_filename","ALTER TABLE nutrition_lectures ADD COLUMN pdf_filename TEXT"),
+            ("weekly_workouts",    "sent_at",    "ALTER TABLE weekly_workouts ADD COLUMN sent_at DATETIME DEFAULT NULL"),
+        ]
+        for table, col, sql in migrations:
+            existing = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+            if col not in existing:
+                conn.execute(sql)
 
 
 def add_user(user_id, username):
