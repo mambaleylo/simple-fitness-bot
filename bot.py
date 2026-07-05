@@ -1176,10 +1176,42 @@ async def send_tomorrow_workout():
 
 # ========== STARTUP ==========
 
+async def remind_add_workout():
+    """
+    Напоминание накануне дня тренировки в 12:00 — проверяем очередь.
+    Если тренировок нет — предупреждаем админов заранее.
+    """
+    workout = get_next_unsent_workout()
+    if not workout:
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    "⚠️ <b>Напоминание!</b>\n\n"
+                    "Завтра день тренировки по расписанию, но очередь пуста.\n"
+                    "Добавь тренировку через /admin → «📅 Добавить тренировку месяца».",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+
 async def main():
     hour, minute = SCHEDULE_TIME.split(":")
+
+    # Джобы отправки тренировок по расписанию (вс/вт/чт в 20:00)
     for day in SCHEDULE_DAYS:
-        scheduler.add_job(send_tomorrow_workout, trigger="cron", day_of_week=day, hour=int(hour), minute=int(minute))
+        scheduler.add_job(
+            send_tomorrow_workout, trigger="cron",
+            day_of_week=day, hour=int(hour), minute=int(minute)
+        )
+        # Напоминание накануне в 12:00 (день - 1, по модулю 7)
+        prev_day = (day - 1) % 7
+        scheduler.add_job(
+            remind_add_workout, trigger="cron",
+            day_of_week=prev_day, hour=12, minute=0
+        )
+
     scheduler.add_job(scheduled_cleanup, trigger="cron", day=1, hour=3, minute=0)
     scheduler.start()
     logging.info("🤖 Бот запущен")
