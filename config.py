@@ -1,7 +1,9 @@
 import os
 
-# Токен бота (получить у @BotFather)
-BOT_TOKEN = "8660610624:AAHk-iphkSfzeRf8HtWsV2rYaA8_2h4Ckvk"
+# Токен бота — НЕ ХРАНИТЬ ЗДЕСЬ
+# Вставь токен в переменные окружения bothost.ru или в /app/config.py на сервере
+# НЕ ПУБЛИКОВАТЬ В GIT!
+BOT_TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН_ЗДЕСЬ")
 
 # Telegram ID администраторов (узнать свой: @userinfobot)
 ADMIN_IDS = [181970023]
