@@ -929,11 +929,40 @@ async def adm_edit_field_start(callback: types.CallbackQuery, state: FSMContext)
 
     await state.set_state(EditFieldState.waiting_value)
     await state.update_data(content_type=content_type, item_id=int(item_id), field=field)
-    await callback.message.edit_text(
-        f"Введи новое значение для поля «<b>{label}</b>»:",
-        reply_markup=cancel_keyboard(), parse_mode="HTML"
-    )
+
+    if field == "gif_file_id":
+        await callback.message.edit_text(
+            "🎞️ Пришли новую <b>GIF-анимацию</b> как файл/анимацию в чат.\n\n"
+            "Или напиши <code>-</code> чтобы удалить текущий GIF:",
+            reply_markup=cancel_keyboard(), parse_mode="HTML"
+        )
+    else:
+        await callback.message.edit_text(
+            f"Введи новое значение для поля «<b>{label}</b>»:",
+            reply_markup=cancel_keyboard(), parse_mode="HTML"
+        )
     await callback.answer()
+
+
+@dp.message(EditFieldState.waiting_value, F.animation)
+async def adm_edit_field_gif(message: types.Message, state: FSMContext):
+    """Обработчик для редактирования GIF — принимает анимацию."""
+    data = await state.get_data()
+    if data.get("field") != "gif_file_id":
+        # Это не шаг редактирования GIF — игнорируем
+        return
+    content_type = data["content_type"]
+    item_id = data["item_id"]
+    cfg = CONTENT_CONFIG[content_type]
+    cfg["update"](item_id, "gif_file_id", message.animation.file_id)
+    await state.clear()
+    await message.answer(
+        "✅ GIF обновлён!",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ К списку", callback_data=f"adm:edit_{content_type}_list")],
+            [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+        ])
+    )
 
 
 @dp.message(EditFieldState.waiting_value)
@@ -943,6 +972,22 @@ async def adm_edit_field_save(message: types.Message, state: FSMContext):
     item_id = data["item_id"]
     field = data["field"]
     cfg = CONTENT_CONFIG[content_type]
+
+    # Если ждали GIF но пришёл текст
+    if field == "gif_file_id":
+        if message.text and message.text.strip() in ("-", "нет", "no"):
+            cfg["update"](item_id, "gif_file_id", None)
+            await state.clear()
+            await message.answer(
+                "✅ GIF удалён.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="◀️ К списку", callback_data=f"adm:edit_{content_type}_list")],
+                    [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+                ])
+            )
+        else:
+            await message.answer("❌ Пришли GIF-анимацию (или напиши <code>-</code> чтобы удалить):", reply_markup=cancel_keyboard(), parse_mode="HTML")
+        return
 
     value = message.text.strip()
     if field == "duration":
