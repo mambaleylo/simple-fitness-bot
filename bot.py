@@ -60,7 +60,7 @@ class AddLectureState(StatesGroup):
     title = State()
     description = State()
     url = State()
-    gif = State()
+    media = State()
 
 class EditFieldState(StatesGroup):
     waiting_value = State()
@@ -260,16 +260,20 @@ async def cb_show_lecture(callback: types.CallbackQuery):
     buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="lectures")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    gif_id = lecture["gif_file_id"] if "gif_file_id" in lecture.keys() else None
-    if gif_id:
+    media_id = lecture["media_file_id"] if "media_file_id" in lecture.keys() else None
+    # Обратная совместимость со старым полем gif_file_id
+    if not media_id and "gif_file_id" in lecture.keys():
+        media_id = lecture["gif_file_id"]
+    media_type = lecture["media_type"] if "media_type" in lecture.keys() else ("animation" if media_id else None)
+
+    if media_id:
         await callback.message.delete()
-        await bot.send_animation(
-            callback.from_user.id,
-            gif_id,
-            caption=text,
-            reply_markup=kb,
-            parse_mode="HTML"
-        )
+        if media_type == "photo":
+            await bot.send_photo(callback.from_user.id, media_id, caption=text, reply_markup=kb, parse_mode="HTML")
+        elif media_type == "video":
+            await bot.send_video(callback.from_user.id, media_id, caption=text, reply_markup=kb, parse_mode="HTML")
+        else:
+            await bot.send_animation(callback.from_user.id, media_id, caption=text, reply_markup=kb, parse_mode="HTML")
     else:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
@@ -770,9 +774,9 @@ async def al_title(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "adm:lec_skip", AddLectureState.description)
 async def al_desc_skip(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(description=None)
-    await state.set_state(AddLectureState.gif)
+    await state.set_state(AddLectureState.media)
     await callback.message.edit_text(
-        "🎞️ Пришли <b>GIF-анимацию</b> или нажми «⏭️ Пропустить»:",
+        "🖼️ Пришли <b>фото, GIF или короткое видео</b> для лекции, или нажми «⏭️ Пропустить»:",
         reply_markup=skip_keyboard(), parse_mode="HTML"
     )
     await callback.answer()
@@ -781,22 +785,34 @@ async def al_desc_skip(callback: types.CallbackQuery, state: FSMContext):
 @dp.message(AddLectureState.description)
 async def al_desc(message: types.Message, state: FSMContext):
     await state.update_data(description=message.text.strip())
-    await state.set_state(AddLectureState.gif)
+    await state.set_state(AddLectureState.media)
     await message.answer(
-        "🎞️ Пришли <b>GIF-анимацию</b> или нажми «⏭️ Пропустить»:",
+        "🖼️ Пришли <b>фото, GIF или короткое видео</b> для лекции, или нажми «⏭️ Пропустить»:",
         reply_markup=skip_keyboard(), parse_mode="HTML"
     )
 
 
 @dp.message(AddLectureState.gif, F.animation)
-async def al_gif_file(message: types.Message, state: FSMContext):
-    await state.update_data(gif_file_id=message.animation.file_id)
+async def al_media_animation(message: types.Message, state: FSMContext):
+    await state.update_data(media_file_id=message.animation.file_id, media_type="animation")
     await _save_lecture(message, state, answer_method="answer")
 
 
-@dp.callback_query(F.data == "adm:lec_skip", AddLectureState.gif)
+@dp.message(AddLectureState.gif, F.photo)
+async def al_media_photo(message: types.Message, state: FSMContext):
+    await state.update_data(media_file_id=message.photo[-1].file_id, media_type="photo")
+    await _save_lecture(message, state, answer_method="answer")
+
+
+@dp.message(AddLectureState.gif, F.video)
+async def al_media_video(message: types.Message, state: FSMContext):
+    await state.update_data(media_file_id=message.video.file_id, media_type="video")
+    await _save_lecture(message, state, answer_method="answer")
+
+
+@dp.callback_query(F.data == "adm:lec_skip", AddLectureState.media)
 async def al_gif_skip(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(gif_file_id=None)
+    await state.update_data(media_file_id=None)
     await _save_lecture(callback.message, state, answer_method="edit")
     await callback.answer()
 
@@ -806,7 +822,8 @@ async def _save_lecture(target, state: FSMContext, answer_method="answer"):
     title = data.get("title") or "Лекция"
     add_nutrition_lecture(
         title, data.get("description"), data.get("video_url"),
-        gif_file_id=data.get("gif_file_id")
+        media_file_id=data.get("media_file_id"),
+        media_type=data.get("media_type")
     )
     await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -848,7 +865,7 @@ CONTENT_CONFIG = {
         "update": update_nutrition_lecture,
         "delete": delete_nutrition_lecture,
         "fields": [("title", "Название"), ("description", "Описание"),
-                   ("video_url", "Ссылка на видео"), ("pdf_url", "Ссылка на PDF (Google Drive)"), ("gif_file_id", "GIF-анимация (file_id)")],
+                   ("video_url", "Ссылка на видео"), ("pdf_url", "Ссылка на PDF (Google Drive)"), ("media_file_id", "GIF-анимация (file_id)")],
     },
 }
 
@@ -930,10 +947,9 @@ async def adm_edit_field_start(callback: types.CallbackQuery, state: FSMContext)
     await state.set_state(EditFieldState.waiting_value)
     await state.update_data(content_type=content_type, item_id=int(item_id), field=field)
 
-    if field == "gif_file_id":
+    if field == "media_file_id":
         await callback.message.edit_text(
-            "🎞️ Пришли новую <b>GIF-анимацию</b> как файл/анимацию в чат.\n\n"
-            "Или напиши <code>-</code> чтобы удалить текущий GIF:",
+            "🖼️ Пришли новое <b>фото, GIF или короткое видео</b>.\n\nИли напиши <code>-</code> чтобы удалить:",
             reply_markup=cancel_keyboard(), parse_mode="HTML"
         )
     else:
@@ -945,24 +961,45 @@ async def adm_edit_field_start(callback: types.CallbackQuery, state: FSMContext)
 
 
 @dp.message(EditFieldState.waiting_value, F.animation)
-async def adm_edit_field_gif(message: types.Message, state: FSMContext):
-    """Обработчик для редактирования GIF — принимает анимацию."""
+async def adm_edit_field_media_animation(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    if data.get("field") != "gif_file_id":
-        # Это не шаг редактирования GIF — игнорируем
+    if data.get("field") != "media_file_id":
         return
-    content_type = data["content_type"]
-    item_id = data["item_id"]
-    cfg = CONTENT_CONFIG[content_type]
-    cfg["update"](item_id, "gif_file_id", message.animation.file_id)
+    cfg = CONTENT_CONFIG[data["content_type"]]
+    cfg["update"](data["item_id"], "media_file_id", message.animation.file_id)
+    cfg["update"](data["item_id"], "media_type", "animation")
     await state.clear()
-    await message.answer(
-        "✅ GIF обновлён!",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ К списку", callback_data=f"adm:edit_{content_type}_list")],
-            [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
-        ])
-    )
+    await message.answer("✅ Медиа обновлено!", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+    ]))
+
+
+@dp.message(EditFieldState.waiting_value, F.photo)
+async def adm_edit_field_media_photo(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    if data.get("field") != "media_file_id":
+        return
+    cfg = CONTENT_CONFIG[data["content_type"]]
+    cfg["update"](data["item_id"], "media_file_id", message.photo[-1].file_id)
+    cfg["update"](data["item_id"], "media_type", "photo")
+    await state.clear()
+    await message.answer("✅ Медиа обновлено!", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+    ]))
+
+
+@dp.message(EditFieldState.waiting_value, F.video)
+async def adm_edit_field_media_video(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    if data.get("field") != "media_file_id":
+        return
+    cfg = CONTENT_CONFIG[data["content_type"]]
+    cfg["update"](data["item_id"], "media_file_id", message.video.file_id)
+    cfg["update"](data["item_id"], "media_type", "video")
+    await state.clear()
+    await message.answer("✅ Медиа обновлено!", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+    ]))
 
 
 @dp.message(EditFieldState.waiting_value)
@@ -974,19 +1011,19 @@ async def adm_edit_field_save(message: types.Message, state: FSMContext):
     cfg = CONTENT_CONFIG[content_type]
 
     # Если ждали GIF но пришёл текст
-    if field == "gif_file_id":
+    if field == "media_file_id":
         if message.text and message.text.strip() in ("-", "нет", "no"):
-            cfg["update"](item_id, "gif_file_id", None)
+            cfg["update"](item_id, "media_file_id", None)
             await state.clear()
             await message.answer(
-                "✅ GIF удалён.",
+                "✅ Медиа удалено.",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="◀️ К списку", callback_data=f"adm:edit_{content_type}_list")],
                     [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
                 ])
             )
         else:
-            await message.answer("❌ Пришли GIF-анимацию (или напиши <code>-</code> чтобы удалить):", reply_markup=cancel_keyboard(), parse_mode="HTML")
+            await message.answer("❌ Пришли фото, GIF или видео (или напиши <code>-</code> чтобы удалить):", reply_markup=cancel_keyboard(), parse_mode="HTML")
         return
 
     value = message.text.strip()
