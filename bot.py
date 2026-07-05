@@ -621,27 +621,63 @@ async def ap_title(message: types.Message, state: FSMContext):
     await state.update_data(title=message.text)
     await state.set_state(AddPermanentState.description)
     await message.answer(
-        "Введи <b>описание</b> (или <code>-</code> чтобы пропустить):",
-        reply_markup=cancel_keyboard(), parse_mode="HTML"
+        "Введи <b>описание</b>:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⏭️ Пропустить", callback_data="adm:perm_skip_desc")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="adm:cancel")],
+        ]),
+        parse_mode="HTML"
     )
+
+
+@dp.callback_query(F.data == "adm:perm_skip_desc", AddPermanentState.description)
+async def ap_desc_skip(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(description=None)
+    await state.set_state(AddPermanentState.url)
+    await callback.message.edit_text(
+        "Введи <b>ссылку на видео</b>:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⏭️ Пропустить", callback_data="adm:perm_skip_url")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="adm:cancel")],
+        ]),
+        parse_mode="HTML"
+    )
+    await callback.answer()
 
 
 @dp.message(AddPermanentState.description)
 async def ap_desc(message: types.Message, state: FSMContext):
-    desc = None if message.text.strip() in ("-", "нет", "no") else message.text
-    await state.update_data(description=desc)
+    await state.update_data(description=message.text)
     await state.set_state(AddPermanentState.url)
     await message.answer(
-        "Введи <b>ссылку на видео</b> (или <code>-</code>):",
-        reply_markup=cancel_keyboard(), parse_mode="HTML"
+        "Введи <b>ссылку на видео</b>:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⏭️ Пропустить", callback_data="adm:perm_skip_url")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="adm:cancel")],
+        ]),
+        parse_mode="HTML"
     )
+
+
+@dp.callback_query(F.data == "adm:perm_skip_url", AddPermanentState.url)
+async def ap_url_skip(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    add_permanent_workout(data["title"], data.get("description"), None, 0)
+    await state.clear()
+    await callback.message.edit_text(
+        f"✅ Тренировка «<b>{data['title']}</b>» добавлена!",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+        ]),
+        parse_mode="HTML"
+    )
+    await callback.answer()
 
 
 @dp.message(AddPermanentState.url)
 async def ap_url(message: types.Message, state: FSMContext):
-    url = None if message.text.lower().strip() in ("нет", "no", "-") else message.text.strip()
     data = await state.get_data()
-    add_permanent_workout(data["title"], data["description"], url, 0)
+    add_permanent_workout(data["title"], data.get("description"), message.text.strip(), 0)
     await state.clear()
     await message.answer(
         f"✅ Тренировка «<b>{data['title']}</b>» добавлена!",
@@ -673,32 +709,63 @@ async def aw_title(message: types.Message, state: FSMContext):
     await state.update_data(title=message.text)
     await state.set_state(AddWeeklyState.description)
     await message.answer(
-        "Введи <b>описание</b> (или <code>-</code> чтобы пропустить):",
-        reply_markup=cancel_keyboard(), parse_mode="HTML"
+        "Введи <b>описание</b>:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⏭️ Пропустить", callback_data="adm:week_skip_desc")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="adm:cancel")],
+        ]),
+        parse_mode="HTML"
     )
+
+
+@dp.callback_query(F.data == "adm:week_skip_desc", AddWeeklyState.description)
+async def aw_desc_skip(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(description=None)
+    await state.set_state(AddWeeklyState.url)
+    await callback.message.edit_text(
+        "Введи <b>ссылку на видео</b>:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⏭️ Пропустить", callback_data="adm:week_skip_url")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="adm:cancel")],
+        ]),
+        parse_mode="HTML"
+    )
+    await callback.answer()
 
 
 @dp.message(AddWeeklyState.description)
 async def aw_desc(message: types.Message, state: FSMContext):
-    desc = None if message.text.strip() in ("-", "нет", "no") else message.text
-    await state.update_data(description=desc)
+    await state.update_data(description=message.text)
     await state.set_state(AddWeeklyState.url)
     await message.answer(
-        "Введи <b>ссылку на видео</b> (или <code>-</code>):",
-        reply_markup=cancel_keyboard(), parse_mode="HTML"
+        "Введи <b>ссылку на видео</b>:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⏭️ Пропустить", callback_data="adm:week_skip_url")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="adm:cancel")],
+        ]),
+        parse_mode="HTML"
     )
+
+
+@dp.callback_query(F.data == "adm:week_skip_url", AddWeeklyState.url)
+async def aw_url_skip(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    add_weekly_workouts([{"title": data["title"], "description": data.get("description"), "video_url": None, "duration": 0}])
+    await state.clear()
+    await callback.message.edit_text(
+        f"✅ Тренировка «<b>{data['title']}</b>» добавлена в тренировки месяца!",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+        ]),
+        parse_mode="HTML"
+    )
+    await callback.answer()
 
 
 @dp.message(AddWeeklyState.url)
 async def aw_url(message: types.Message, state: FSMContext):
-    url = None if message.text.lower().strip() in ("нет", "no", "-") else message.text.strip()
     data = await state.get_data()
-    add_weekly_workouts([{
-        "title": data["title"],
-        "description": data["description"],
-        "video_url": url,
-        "duration": 0
-    }])
+    add_weekly_workouts([{"title": data["title"], "description": data.get("description"), "video_url": message.text.strip(), "duration": 0}])
     await state.clear()
     await message.answer(
         f"✅ Тренировка «<b>{data['title']}</b>» добавлена в тренировки месяца!",
