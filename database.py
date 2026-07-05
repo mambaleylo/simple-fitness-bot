@@ -70,6 +70,8 @@ def init_db():
                 pdf_filename TEXT,
                 pdf_url TEXT,
                 gif_file_id TEXT,
+                media_file_id TEXT,
+                media_type TEXT,
                 order_num INTEGER
             )
         ''')
@@ -78,6 +80,8 @@ def init_db():
         migrations = [
             ("nutrition_lectures", "pdf_url",    "ALTER TABLE nutrition_lectures ADD COLUMN pdf_url TEXT"),
             ("nutrition_lectures", "gif_file_id","ALTER TABLE nutrition_lectures ADD COLUMN gif_file_id TEXT"),
+            ("nutrition_lectures", "media_file_id","ALTER TABLE nutrition_lectures ADD COLUMN media_file_id TEXT"),
+            ("nutrition_lectures", "media_type","ALTER TABLE nutrition_lectures ADD COLUMN media_type TEXT"),
             ("nutrition_lectures", "pdf_filename","ALTER TABLE nutrition_lectures ADD COLUMN pdf_filename TEXT"),
             ("weekly_workouts",    "sent_at",    "ALTER TABLE weekly_workouts ADD COLUMN sent_at DATETIME DEFAULT NULL"),
         ]
@@ -260,13 +264,13 @@ def get_nutrition_lecture(lecture_id):
         return conn.execute('SELECT * FROM nutrition_lectures WHERE id=?', (lecture_id,)).fetchone()
 
 
-def add_nutrition_lecture(title, description, video_url, pdf_file_id=None, pdf_filename=None, pdf_url=None, gif_file_id=None):
+def add_nutrition_lecture(title, description, video_url, pdf_file_id=None, pdf_filename=None, pdf_url=None, gif_file_id=None, media_file_id=None, media_type=None):
     with get_db() as conn:
         row = conn.execute('SELECT COALESCE(MAX(order_num), 0) + 1 AS n FROM nutrition_lectures').fetchone()
         order_num = row['n']
         conn.execute(
-            'INSERT INTO nutrition_lectures (title, description, video_url, pdf_file_id, pdf_filename, pdf_url, gif_file_id, order_num) VALUES (?,?,?,?,?,?,?,?)',
-            (title, description, video_url, pdf_file_id, pdf_filename, pdf_url, gif_file_id, order_num)
+            'INSERT INTO nutrition_lectures (title, description, video_url, pdf_file_id, pdf_filename, pdf_url, gif_file_id, media_file_id, media_type, order_num) VALUES (?,?,?,?,?,?,?,?,?,?)',
+            (title, description, video_url, pdf_file_id, pdf_filename, pdf_url, gif_file_id, media_file_id, media_type, order_num)
         )
 
 
