@@ -859,19 +859,19 @@ async def al_desc(message: types.Message, state: FSMContext):
     )
 
 
-@dp.message(AddLectureState.gif, F.animation)
+@dp.message(AddLectureState.media, F.animation)
 async def al_media_animation(message: types.Message, state: FSMContext):
     await state.update_data(media_file_id=message.animation.file_id, media_type="animation")
     await _save_lecture(message, state, answer_method="answer")
 
 
-@dp.message(AddLectureState.gif, F.photo)
+@dp.message(AddLectureState.media, F.photo)
 async def al_media_photo(message: types.Message, state: FSMContext):
     await state.update_data(media_file_id=message.photo[-1].file_id, media_type="photo")
     await _save_lecture(message, state, answer_method="answer")
 
 
-@dp.message(AddLectureState.gif, F.video)
+@dp.message(AddLectureState.media, F.video)
 async def al_media_video(message: types.Message, state: FSMContext):
     await state.update_data(media_file_id=message.video.file_id, media_type="video")
     await _save_lecture(message, state, answer_method="answer")
