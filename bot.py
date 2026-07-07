@@ -1245,6 +1245,18 @@ async def send_tomorrow_workout():
 
 # ========== STARTUP ==========
 
+@dp.message()
+async def fallback_handler(message: types.Message, state: FSMContext):
+    """Любое нераспознанное сообщение — показываем меню."""
+    current_state = await state.get_state()
+    if current_state is not None:
+        # Если пользователь в FSM — не перебиваем
+        return
+    uid = message.from_user.id
+    add_user(uid, message.from_user.username)
+    await message.answer("⬇️ Главное меню:", reply_markup=main_menu(uid))
+
+
 async def remind_add_workout():
     """
     Напоминание накануне дня тренировки в 12:00 — проверяем очередь.
