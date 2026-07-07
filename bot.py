@@ -173,7 +173,16 @@ async def cmd_cancel(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "back")
 async def cb_back(callback: types.CallbackQuery):
-    await callback.message.edit_text("📋 Главное меню:", reply_markup=main_menu(callback.from_user.id))
+    text = "📋 Главное меню:"
+    kb = main_menu(callback.from_user.id)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.message.answer(text, reply_markup=kb)
     await callback.answer()
 
 
@@ -215,29 +224,31 @@ async def cb_weekly(callback: types.CallbackQuery):
 async def cb_lectures(callback: types.CallbackQuery):
     """Лекции по питанию — бесплатно, без подписки."""
     lectures = get_nutrition_lectures()
+
     if not lectures:
-        await callback.message.edit_text(
-            "📭 Лекции по питанию пока не добавлены.\n\nСкоро здесь появятся материалы 🍎",
-            reply_markup=back_keyboard()
-        )
-        await callback.answer()
-        return
+        text = "📭 Лекции по питанию пока не добавлены.\n\nСкоро здесь появятся материалы 🍎"
+        kb = back_keyboard()
+    else:
+        buttons = []
+        for lec in lectures:
+            buttons.append([InlineKeyboardButton(
+                text=f"🍎 {lec['title']}",
+                callback_data=f"lec:{lec['id']}"
+            )])
+        buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back")])
+        text = "🍎 <b>Лекции по питанию</b>\n\nДоступны всем бесплатно:\n\n"
+        text += "\n".join(f"• {lec['title']}" for lec in lectures)
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    buttons = []
-    for lec in lectures:
-        pdf_icon = "📄" if lec["pdf_url"] else ""
-        buttons.append([InlineKeyboardButton(
-            text=f"🍎 {lec['title']} {pdf_icon}",
-            callback_data=f"lec:{lec['id']}"
-        )])
-    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back")])
-
-    text = "🍎 <b>Лекции по питанию</b>\n\nДоступны всем бесплатно:\n\n"
-    text += "\n".join(f"• {lec['title']}" for lec in lectures)
-
-    await callback.message.edit_text(
-        text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML"
-    )
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        # Предыдущее сообщение было медиа — удаляем и отправляем новое
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 
