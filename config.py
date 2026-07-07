@@ -1,9 +1,15 @@
 import os
 
-# Токен бота — НЕ ХРАНИТЬ ЗДЕСЬ
-# Вставь токен в переменные окружения bothost.ru или в /app/config.py на сервере
-# НЕ ПУБЛИКОВАТЬ В GIT!
-BOT_TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН_ЗДЕСЬ")
+# Токен бота — читается из переменных окружения.
+# MY_BOT_TOKEN — пользовательская переменная bothost.ru (приоритет)
+BOT_TOKEN = (
+    os.getenv("MY_BOT_TOKEN") or
+    os.getenv("API_TOKEN") or
+    os.getenv("BOT_TOKEN") or
+    os.getenv("TELEGRAM_BOT_TOKEN") or
+    os.getenv("TOKEN") or
+    "ТОКЕН_НЕ_НАЙДЕН"
+)
 
 # Telegram ID администраторов (узнать свой: @userinfobot)
 ADMIN_IDS = [181970023]
