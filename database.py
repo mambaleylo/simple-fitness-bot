@@ -176,10 +176,11 @@ def delete_permanent_workout(workout_id):
 
 
 def get_active_weekly_workouts():
+    """Возвращает только уже отправленные тренировки — то что пользователь видит в меню."""
     with get_db() as conn:
         month_ago = (datetime.now() - timedelta(days=30)).date()
         return conn.execute(
-            'SELECT * FROM weekly_workouts WHERE added_at >= ? ORDER BY week_number, id',
+            'SELECT * FROM weekly_workouts WHERE added_at >= ? AND sent_at IS NOT NULL ORDER BY sent_at DESC',
             (str(month_ago),)
         ).fetchall()
 
