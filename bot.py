@@ -75,7 +75,7 @@ def main_menu(user_id=None):
     ]
     if user_id and is_subscribed(user_id):
         days = get_subscription_days_left(user_id)
-        buttons.append([InlineKeyboardButton(text="📅 Тренировки месяца", callback_data="weekly")])
+        buttons.append([InlineKeyboardButton(text="⭐ Тренировки месяца", callback_data="weekly")])
         buttons.append([InlineKeyboardButton(text=f"⭐ Подписка активна ({days} дн.)", callback_data="sub_info")])
     else:
         buttons.append([InlineKeyboardButton(text="💎 Купить подписку", callback_data="buy_sub")])
@@ -96,6 +96,7 @@ def admin_menu():
         [InlineKeyboardButton(text="👥 Список пользователей", callback_data="adm:users")],
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="adm:broadcast")],
         [InlineKeyboardButton(text="🗑️ Очистить старые тренировки", callback_data="adm:cleanup")],
+        [InlineKeyboardButton(text="❓ Помощь по панели", callback_data="adm:help")],
     ])
 
 
@@ -131,7 +132,17 @@ def is_admin(user_id: int) -> bool:
 
 
 async def send_admin_panel(target, edit=False):
-    text = "🔧 <b>Панель администратора</b>\n\nВыбери действие:"
+    text = (
+        "🔧 <b>Панель администратора</b>\n\n"
+        "🏋️ <b>Добавить закреплённую</b> — тренировки которые всегда видны всем (разминка, заминка и др.)\n"
+        "📅 <b>Добавить тренировку месяца</b> — встаёт в очередь и автоматически отправляется подписчикам в вс/вт/чт в 20:00\n"
+        "🍎 <b>Добавить лекцию</b> — материалы по питанию, доступны всем без подписки\n"
+        "✏️ <b>Редактировать</b> — изменить или удалить уже добавленный контент\n"
+        "✅ <b>Активировать подписку</b> — открыть пользователю доступ к тренировкам месяца\n"
+        "👥 <b>Пользователи</b> — список всех, кто запускал бота\n"
+        "📢 <b>Рассылка</b> — отправить сообщение всем пользователям\n"
+        "🗑️ <b>Очистить</b> — удалить отправленные тренировки старше 30 дней"
+    )
     if edit:
         await target.message.edit_text(text, reply_markup=admin_menu(), parse_mode="HTML")
         await target.answer()
@@ -486,7 +497,56 @@ async def successful_payment(message: types.Message):
 
 # ========== ADMIN CALLBACKS ==========
 
-@dp.callback_query(F.data == "adm:cancel")
+@dp.callback_query(F.data == "adm:help")
+async def adm_help(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    text = (
+        "❓ <b>Подробная помощь по панели</b>\n\n"
+
+        "🏋️ <b>Закреплённые тренировки</b>\n"
+        "Видны всем пользователям без подписки. Это постоянный контент — разминка, заминка, дыхание и т.д. "
+        "Добавляй сюда то, что актуально всегда.\n\n"
+
+        "📅 <b>Тренировки месяца</b>\n"
+        "Видны только подписчикам. После добавления тренировка встаёт в очередь. "
+        "Каждый вс/вт/чт в 20:00 бот берёт следующую из очереди и рассылает подписчикам. "
+        "Накануне в 12:00 ты получишь предупреждение если очередь пуста.\n\n"
+
+        "🍎 <b>Лекции по питанию</b>\n"
+        "Доступны всем без подписки. Добавляй ссылки на Google Drive с видео или PDF. "
+        "Можно прикрепить фото/видео которое будет показываться при открытии лекции.\n\n"
+
+        "✅ <b>Активация подписки</b>\n"
+        "После оплаты активируй подписку вручную. Выбери длительность: 1/30/60/90 дней. "
+        "Пользователь получит приветственное сообщение автоматически.\n\n"
+
+        "✏️ <b>Редактирование</b>\n"
+        "Можно менять название, описание, ссылку на видео, медиафайл. "
+        "⚠️ Удаление необратимо — данные нельзя восстановить!\n\n"
+
+        "📢 <b>Рассылка</b>\n"
+        "Отправляет сообщение ВСЕМ пользователям кто когда-либо запускал бота. "
+        "Поддерживается HTML: <code>&lt;b&gt;жирный&lt;/b&gt;</code>, <code>&lt;i&gt;курсив&lt;/i&gt;</code>.\n\n"
+
+        "🗑️ <b>Очистка</b>\n"
+        "Удаляет только уже отправленные тренировки старше 30 дней. "
+        "Неотправленные тренировки из очереди НЕ затрагиваются.\n\n"
+
+        "💾 <b>Бэкап</b>\n"
+        "Каждое воскресенье в 04:00 бот автоматически присылает тебе файл базы данных. "
+        "Сохраняй эти файлы — это твоя страховка от потери данных."
+    )
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+        ]),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
 async def adm_cancel(callback: types.CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer()
@@ -537,7 +597,11 @@ async def adm_cleanup(callback: types.CallbackQuery):
         await callback.answer()
         return
     deleted = cleanup_old_workouts()
-    await callback.answer(f"🗑️ Удалено старых тренировок: {deleted}", show_alert=True)
+    await callback.answer(
+        f"🗑️ Удалено {deleted} отправленных тренировок старше 30 дней.\n"
+        f"Неотправленные тренировки из очереди не тронуты.",
+        show_alert=True
+    )
     await send_admin_panel(callback, edit=True)
 
 
@@ -558,7 +622,11 @@ async def adm_activate_start(callback: types.CallbackQuery, state: FSMContext):
         return
     await state.set_state(ActivateState.user_id)
     await callback.message.edit_text(
-        "✅ <b>Активация подписки</b>\n\nВведи <b>Telegram ID</b> пользователя:\n<i>(Узнать: @userinfobot)</i>",
+        "✅ <b>Активация подписки</b>\n\n"
+        "ℹ️ После активации пользователь получит приветственное сообщение "
+        "и доступ к разделу «⭐ Тренировки месяца».\n\n"
+        "Введи <b>Telegram ID</b> пользователя:\n"
+        "<i>(Узнать ID: @userinfobot)</i>",
         reply_markup=cancel_keyboard(), parse_mode="HTML"
     )
     await callback.answer()
@@ -625,7 +693,9 @@ async def adm_add_perm_start(callback: types.CallbackQuery, state: FSMContext):
         return
     await state.set_state(AddPermanentState.title)
     await callback.message.edit_text(
-        "🏋️ <b>Новая закреплённая тренировка</b>\n\nВведи <b>название</b>:",
+        "🏋️ <b>Добавить закреплённую тренировку</b>\n\n"
+        "ℹ️ Закреплённые тренировки <b>видны всем пользователям без подписки</b> — это постоянный базовый контент.\n\n"
+        "Введи <b>название</b> тренировки:",
         reply_markup=cancel_keyboard(), parse_mode="HTML"
     )
     await callback.answer()
@@ -713,7 +783,10 @@ async def adm_add_weekly_start(callback: types.CallbackQuery, state: FSMContext)
         return
     await state.set_state(AddWeeklyState.title)
     await callback.message.edit_text(
-        "📅 <b>Новая тренировка месяца</b>\n\nВведи <b>название</b>:",
+        "📅 <b>Добавить тренировку месяца</b>\n\n"
+        "ℹ️ Тренировка встанет в очередь и будет автоматически отправлена подписчикам "
+        "в ближайший день по расписанию (вс/вт/чт в 20:00).\n\n"
+        "Введи <b>название</b> тренировки:",
         reply_markup=cancel_keyboard(), parse_mode="HTML"
     )
     await callback.answer()
@@ -1122,12 +1195,19 @@ async def adm_delete_item_confirm(callback: types.CallbackQuery):
         await callback.answer()
         return
     _, _, content_type, item_id = callback.data.split(":")
+    type_names = {"permanent": "закреплённую тренировку", "weekly": "тренировку месяца", "lecture": "лекцию по питанию"}
+    type_name = type_names.get(content_type, "элемент")
     await callback.message.edit_text(
-        "⚠️ Точно удалить? Это необратимо.",
+        f"🗑️ <b>Удаление</b>\n\n"
+        f"⚠️ Ты собираешься удалить <b>{type_name}</b>.\n\n"
+        f"Это действие <b>необратимо</b> — восстановить данные будет невозможно.\n"
+        f"Пользователи больше не увидят этот материал.\n\n"
+        f"Ты уверен?",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"adm:delete_confirm:{content_type}:{item_id}")],
             [InlineKeyboardButton(text="❌ Отмена", callback_data=f"adm:edit_item:{content_type}:{item_id}")]
-        ])
+        ]),
+        parse_mode="HTML"
     )
     await callback.answer()
 
@@ -1160,8 +1240,12 @@ async def adm_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
         return
     await state.set_state(BroadcastState.text)
     await callback.message.edit_text(
-        "📢 <b>Рассылка</b>\n\nВведи текст. Поддерживается HTML:\n"
-        "<code>&lt;b&gt;жирный&lt;/b&gt;</code>, <code>&lt;i&gt;курсив&lt;/i&gt;</code>",
+        "📢 <b>Рассылка</b>\n\n"
+        "ℹ️ Сообщение получат <b>все пользователи</b> кто когда-либо запускал бота.\n"
+        "Отменить после отправки невозможно.\n\n"
+        "Поддерживается HTML:\n"
+        "<code>&lt;b&gt;жирный&lt;/b&gt;</code>, <code>&lt;i&gt;курсив&lt;/i&gt;</code>\n\n"
+        "Введи текст:",
         reply_markup=cancel_keyboard(), parse_mode="HTML"
     )
     await callback.answer()
