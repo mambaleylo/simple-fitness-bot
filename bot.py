@@ -547,6 +547,7 @@ async def adm_help(callback: types.CallbackQuery):
     )
     await callback.answer()
 
+@dp.callback_query(F.data == "adm:cancel")
 async def adm_cancel(callback: types.CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer()
