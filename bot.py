@@ -226,7 +226,21 @@ async def cb_weekly(callback: types.CallbackQuery):
         await callback.answer()
         return
     text = "📅 <b>Тренировки этого месяца:</b>\n\n"
-    text += "\n".join(f"• {w['title']} (неделя {w['week_number']})" for w in workouts)
+    DAYS_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    MONTHS_RU = ["", "янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
+
+    def fmt_date(w):
+        try:
+            from datetime import datetime as dt
+            d = dt.strptime(w["sent_at"][:10], "%Y-%m-%d")
+            return f"{DAYS_RU[d.weekday()]} {d.day} {MONTHS_RU[d.month]}"
+        except Exception:
+            return ""
+
+    text += "\n".join(
+        f"• {w['title']} ({fmt_date(w)})" if fmt_date(w) else f"• {w['title']}"
+        for w in workouts
+    )
     await callback.message.edit_text(text, reply_markup=workout_list_keyboard(workouts, "weekly", uid), parse_mode="HTML")
     await callback.answer()
 
