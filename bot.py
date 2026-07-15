@@ -1179,6 +1179,7 @@ async def adm_broadcast_send(message: types.Message, state: FSMContext):
             sent += 1
         except Exception:
             failed += 1
+        await asyncio.sleep(0.05)  # 20 сообщений/сек — ниже лимита Telegram
     await status_msg.edit_text(
         f"📢 <b>Рассылка завершена</b>\n\n✅ Отправлено: {sent}\n❌ Ошибок: {failed}",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -1198,6 +1199,27 @@ async def scheduled_cleanup():
             await bot.send_message(admin_id, f"🗑️ Автоочистка: удалено {deleted} старых тренировок.")
         except Exception:
             pass
+
+
+async def backup_database():
+    """Еженедельный бэкап базы данных — отправляет файл всем админам."""
+    import os
+    from config import DATA_DIR
+    db_path = os.path.join(DATA_DIR, "fitbot.db")
+    if not os.path.exists(db_path):
+        return
+    from datetime import datetime
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    for admin_id in ADMIN_IDS:
+        try:
+            with open(db_path, "rb") as f:
+                await bot.send_document(
+                    admin_id, f,
+                    filename=f"fitbot_backup_{date_str}.db",
+                    caption=f"💾 Еженедельный бэкап базы данных ({date_str})"
+                )
+        except Exception as e:
+            logging.error(f"Ошибка бэкапа для {admin_id}: {e}")
 
 
 async def send_tomorrow_workout():
@@ -1294,6 +1316,8 @@ async def main():
         )
 
     scheduler.add_job(scheduled_cleanup, trigger="cron", day=1, hour=3, minute=0)
+    # Еженедельный бэкап базы — каждое воскресенье в 04:00
+    scheduler.add_job(backup_database, trigger="cron", day_of_week=6, hour=4, minute=0)
     scheduler.start()
     logging.info("🤖 Бот запущен")
     await dp.start_polling(bot)
