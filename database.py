@@ -161,7 +161,11 @@ def get_permanent_workout(workout_id):
         return conn.execute('SELECT * FROM permanent_workouts WHERE id=?', (workout_id,)).fetchone()
 
 
+PERMANENT_ALLOWED_FIELDS = {"title", "description", "video_url", "duration", "order_num"}
+
 def update_permanent_workout(workout_id, field, value):
+    if field not in PERMANENT_ALLOWED_FIELDS:
+        raise ValueError(f"Недопустимое поле: {field}")
     with get_db() as conn:
         conn.execute(f'UPDATE permanent_workouts SET {field}=? WHERE id=?', (value, workout_id))
 
@@ -212,10 +216,13 @@ def add_weekly_workouts(workouts_list):
 
 
 def cleanup_old_workouts():
+    """Удаляет только уже отправленные тренировки старше 30 дней.
+    Неотправленные (sent_at IS NULL) не трогаем — они ещё в очереди."""
     with get_db() as conn:
         month_ago = (datetime.now() - timedelta(days=30)).date()
         deleted = conn.execute(
-            'DELETE FROM weekly_workouts WHERE added_at < ?', (str(month_ago),)
+            'DELETE FROM weekly_workouts WHERE added_at < ? AND sent_at IS NOT NULL',
+            (str(month_ago),)
         ).rowcount
         return deleted
 
@@ -225,7 +232,11 @@ def get_weekly_workout(workout_id):
         return conn.execute('SELECT * FROM weekly_workouts WHERE id=?', (workout_id,)).fetchone()
 
 
+WEEKLY_ALLOWED_FIELDS = {"title", "description", "video_url", "duration", "week_number", "sent_at"}
+
 def update_weekly_workout(workout_id, field, value):
+    if field not in WEEKLY_ALLOWED_FIELDS:
+        raise ValueError(f"Недопустимое поле: {field}")
     with get_db() as conn:
         conn.execute(f'UPDATE weekly_workouts SET {field}=? WHERE id=?', (value, workout_id))
 
@@ -274,7 +285,11 @@ def add_nutrition_lecture(title, description, video_url, pdf_file_id=None, pdf_f
         )
 
 
+LECTURE_ALLOWED_FIELDS = {"title", "description", "video_url", "pdf_file_id", "pdf_filename", "pdf_url", "gif_file_id", "media_file_id", "media_type", "order_num"}
+
 def update_nutrition_lecture(lecture_id, field, value):
+    if field not in LECTURE_ALLOWED_FIELDS:
+        raise ValueError(f"Недопустимое поле: {field}")
     with get_db() as conn:
         conn.execute(f'UPDATE nutrition_lectures SET {field}=? WHERE id=?', (value, lecture_id))
 
