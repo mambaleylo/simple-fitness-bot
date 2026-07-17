@@ -72,7 +72,13 @@ class AddExtraState(StatesGroup):
     media = State()
 
 class BodyParamsState(StatesGroup):
-    waiting = State()
+    weight = State()
+    chest = State()
+    waist = State()
+    hips = State()
+    arm = State()
+    thigh = State()
+    photo = State()
 
 class EditFieldState(StatesGroup):
     waiting_value = State()
@@ -652,80 +658,142 @@ async def cb_progress(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "progress:params")
 async def cb_progress_params(callback: types.CallbackQuery, state: FSMContext):
-    uid = callback.from_user.id
-    params = get_body_params(uid)
-    current = ""
-    if params:
-        parts = []
-        if params["weight"]: parts.append(f"вес {params['weight']} кг")
-        if params["waist"]: parts.append(f"талия {params['waist']} см")
-        if parts:
-            current = f"\n<i>Сейчас: {', '.join(parts)}</i>"
-
-    await state.set_state(BodyParamsState.waiting)
+    await state.set_state(BodyParamsState.weight)
+    await state.update_data(params={})
     await callback.message.edit_text(
-        f"📏 <b>Обновить параметры тела</b>{current}\n\n"
-        "Введи параметры в любом удобном формате, например:\n\n"
-        "<code>вес 65\nталия 70\nгрудь 90\nбёдра 95\nрука 28\nбедро 55</code>\n\n"
-        "Можно указать только те параметры которые хочешь обновить.",
+        "📏 <b>Параметры тела (1/6)</b>\n\n⚖️ Вес\nВведи число в <b>кг</b>:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="progress")]
+            [InlineKeyboardButton(text="⏭️ Пропустить", callback_data="params:skip:weight")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="progress")],
         ]),
         parse_mode="HTML"
     )
     await callback.answer()
 
 
-@dp.message(BodyParamsState.waiting)
-async def cb_save_params(message: types.Message, state: FSMContext):
-    import re
-    uid = message.from_user.id
-    text = message.text.lower()
+BODY_FIELDS_ORDER = [
+    ("weight", "⚖️ Вес",          "кг", BodyParamsState.weight,  "chest"),
+    ("chest",  "📐 Обхват груди", "см", BodyParamsState.chest,   "waist"),
+    ("waist",  "📐 Обхват талии", "см", BodyParamsState.waist,   "hips"),
+    ("hips",   "📐 Обхват бёдер", "см", BodyParamsState.hips,    "arm"),
+    ("arm",    "📐 Обхват руки",  "см", BodyParamsState.arm,     "thigh"),
+    ("thigh",  "📐 Обхват бедра", "см", BodyParamsState.thigh,   None),
+]
+FIELD_IDX = {f[0]: i for i, f in enumerate(BODY_FIELDS_ORDER)}
 
-    params = {}
-    patterns = {
-        'weight': r'вес\s*([\d.,]+)',
-        'chest': r'груд[ьб]\s*([\d.,]+)',
-        'waist': r'талия\s*([\d.,]+)',
-        'hips': r'бёдр[аы]\s*([\d.,]+)|бедра\s*([\d.,]+)',
-        'arm': r'рук[аи]\s*([\d.,]+)',
-        'thigh': r'бедр[оа]\s*([\d.,]+)',
-    }
-    for field, pattern in patterns.items():
-        m = re.search(pattern, text)
-        if m:
-            val = next(v for v in m.groups() if v) if '(' in pattern else m.group(1)
-            params[field] = float(val.replace(',', '.'))
 
-    if not params:
-        await message.answer(
-            "❌ Не удалось распознать параметры. Попробуй в формате:\n"
-            "<code>вес 65\nталия 70</code>",
-            parse_mode="HTML"
-        )
-        return
+def _param_kb(skip_field):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏭️ Пропустить", callback_data=f"params:skip:{skip_field}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="progress")],
+    ])
 
-    save_body_params(uid, params)
-    await state.clear()
-    names = {"weight": "Вес", "chest": "Грудь", "waist": "Талия", "hips": "Бёдра", "arm": "Рука", "thigh": "Бедро"}
-    saved = "\n".join(f"• {names[k]}: {v}" for k, v in params.items())
-    await message.answer(
-        f"✅ <b>Параметры сохранены!</b>\n\n{saved}",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ К прогрессу", callback_data="progress")]
-        ]),
-        parse_mode="HTML"
-    )
+
+async def _save_and_next(target, state, field, value, edit=False):
+    data = await state.get_data()
+    params = data.get("params", {})
+    if value is not None:
+        params[field] = value
+    await state.update_data(params=params)
+
+    # Найти следующее поле
+    current = next((f for f in BODY_FIELDS_ORDER if f[0] == field), None)
+    next_field = current[4] if current else None
+
+    if next_field:
+        next_info = next(f for f in BODY_FIELDS_ORDER if f[0] == next_field)
+        idx = FIELD_IDX[next_field] + 1
+        text = f"📏 <b>Параметры тела ({idx}/6)</b>\n\n{next_info[1]}\nВведи число в <b>{next_info[2]}</b>:"
+        await state.set_state(next_info[3])
+        try:
+            await target.edit_text(text, reply_markup=_param_kb(next_field), parse_mode="HTML")
+        except Exception:
+            await target.answer(text, reply_markup=_param_kb(next_field), parse_mode="HTML")
+    else:
+        # Всё заполнено — сохраняем
+        uid = target.chat.id if hasattr(target, 'chat') else getattr(target, 'from_user', None)
+        if uid and hasattr(uid, 'id'):
+            uid = uid.id
+        if params and uid:
+            save_body_params(uid, params)
+        await state.clear()
+        labels = {f[0]: f[1] for f in BODY_FIELDS_ORDER}
+        units = {f[0]: f[2] for f in BODY_FIELDS_ORDER}
+        saved = "\n".join(f"• {labels[k]}: <b>{v} {units[k]}</b>" for k,v in params.items()) if params else "<i>Ничего не сохранено</i>"
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ К прогрессу", callback_data="progress")]])
+        text = f"✅ <b>Параметры сохранены!</b>\n\n{saved}"
+        try:
+            await target.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            await target.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("params:skip:"))
+async def cb_param_skip(callback: types.CallbackQuery, state: FSMContext):
+    field = callback.data.split(":")[2]
+    await _save_and_next(callback.message, state, field, None, edit=True)
+    await callback.answer()
+
+
+@dp.message(BodyParamsState.weight)
+async def bp_weight(message: types.Message, state: FSMContext):
+    try:
+        val = float(message.text.strip().replace(",", "."))
+        await _save_and_next(message, state, "weight", val, edit=False)
+    except ValueError:
+        await message.answer("❌ Введи число (кг), например: <code>65</code>", reply_markup=_param_kb("weight"), parse_mode="HTML")
+
+
+@dp.message(BodyParamsState.chest)
+async def bp_chest(message: types.Message, state: FSMContext):
+    try:
+        val = float(message.text.strip().replace(",", "."))
+        await _save_and_next(message, state, "chest", val, edit=False)
+    except ValueError:
+        await message.answer("❌ Введи число (см), например: <code>90</code>", reply_markup=_param_kb("chest"), parse_mode="HTML")
+
+
+@dp.message(BodyParamsState.waist)
+async def bp_waist(message: types.Message, state: FSMContext):
+    try:
+        val = float(message.text.strip().replace(",", "."))
+        await _save_and_next(message, state, "waist", val, edit=False)
+    except ValueError:
+        await message.answer("❌ Введи число (см), например: <code>70</code>", reply_markup=_param_kb("waist"), parse_mode="HTML")
+
+
+@dp.message(BodyParamsState.hips)
+async def bp_hips(message: types.Message, state: FSMContext):
+    try:
+        val = float(message.text.strip().replace(",", "."))
+        await _save_and_next(message, state, "hips", val, edit=False)
+    except ValueError:
+        await message.answer("❌ Введи число (см), например: <code>95</code>", reply_markup=_param_kb("hips"), parse_mode="HTML")
+
+
+@dp.message(BodyParamsState.arm)
+async def bp_arm(message: types.Message, state: FSMContext):
+    try:
+        val = float(message.text.strip().replace(",", "."))
+        await _save_and_next(message, state, "arm", val, edit=False)
+    except ValueError:
+        await message.answer("❌ Введи число (см), например: <code>28</code>", reply_markup=_param_kb("arm"), parse_mode="HTML")
+
+
+@dp.message(BodyParamsState.thigh)
+async def bp_thigh(message: types.Message, state: FSMContext):
+    try:
+        val = float(message.text.strip().replace(",", "."))
+        await _save_and_next(message, state, "thigh", val, edit=False)
+    except ValueError:
+        await message.answer("❌ Введи число (см), например: <code>55</code>", reply_markup=_param_kb("thigh"), parse_mode="HTML")
 
 
 @dp.callback_query(F.data == "progress:photo")
 async def cb_progress_photo_prompt(callback: types.CallbackQuery, state: FSMContext):
-    await state.set_state(BodyParamsState.waiting)
-    await state.update_data(waiting_for="photo")
+    await state.set_state(BodyParamsState.photo)
     await callback.message.edit_text(
-        "📸 <b>Фото прогресса</b>\n\n"
-        "Пришли фотографию — она будет сохранена как твоё текущее фото прогресса.\n\n"
-        "<i>Фото хранится только в боте и видно только тебе.</i>",
+        "📸 <b>Фото прогресса</b>\n\nПришли фотографию — она сохранится и будет видна только тебе.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data="progress")]
         ]),
@@ -734,21 +802,16 @@ async def cb_progress_photo_prompt(callback: types.CallbackQuery, state: FSMCont
     await callback.answer()
 
 
-@dp.message(BodyParamsState.waiting, F.photo)
+@dp.message(BodyParamsState.photo, F.photo)
 async def cb_save_progress_photo(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    if data.get("waiting_for") == "photo":
-        save_progress_photo(message.from_user.id, message.photo[-1].file_id)
-        await state.clear()
-        await message.answer(
-            "✅ Фото прогресса сохранено!",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="◀️ К прогрессу", callback_data="progress")]
-            ])
-        )
-    else:
-        # Это не шаг фото — передаём обработчику параметров
-        await cb_save_params(message, state)
+    save_progress_photo(message.from_user.id, message.photo[-1].file_id)
+    await state.clear()
+    await message.answer(
+        "✅ Фото прогресса сохранено!",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ К прогрессу", callback_data="progress")]
+        ])
+    )
 
 
 @dp.callback_query(F.data == "progress:view_photo")
