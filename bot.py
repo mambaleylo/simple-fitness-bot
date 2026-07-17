@@ -26,7 +26,10 @@ from database import (
     delete_nutrition_lecture, get_next_unsent_workout, mark_workout_sent,
     get_permanent_workout, update_permanent_workout, delete_permanent_workout,
     get_weekly_workout, update_weekly_workout, delete_weekly_workout,
-    update_nutrition_lecture
+    update_nutrition_lecture,
+    get_extra_materials, get_extra_material, add_extra_material,
+    update_extra_material, delete_extra_material,
+    save_body_params, get_body_params, save_progress_photo, get_progress_photo
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -62,6 +65,15 @@ class AddLectureState(StatesGroup):
     url = State()
     media = State()
 
+class AddExtraState(StatesGroup):
+    title = State()
+    description = State()
+    url = State()
+    media = State()
+
+class BodyParamsState(StatesGroup):
+    waiting = State()
+
 class EditFieldState(StatesGroup):
     waiting_value = State()
 
@@ -71,7 +83,8 @@ class EditFieldState(StatesGroup):
 def main_menu(user_id=None):
     buttons = [
         [InlineKeyboardButton(text="🏋️ Закреплённые тренировки", callback_data="permanent")],
-        [InlineKeyboardButton(text="🍎 Лекции по питанию", callback_data="lectures")],
+        [InlineKeyboardButton(text="🍎 Информация по питанию", callback_data="lectures")],
+        [InlineKeyboardButton(text="📋 Дополнительная информация", callback_data="extra")],
     ]
     if user_id and is_subscribed(user_id):
         days = get_subscription_days_left(user_id)
@@ -88,10 +101,12 @@ def admin_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏋️ Добавить закреплённую", callback_data="adm:add_permanent")],
         [InlineKeyboardButton(text="📅 Добавить тренировку месяца", callback_data="adm:add_weekly")],
-        [InlineKeyboardButton(text="🍎 Добавить лекцию по питанию", callback_data="adm:add_lecture")],
+        [InlineKeyboardButton(text="🍎 Добавить информацию по питанию", callback_data="adm:add_lecture")],
         [InlineKeyboardButton(text="✏️ Редактировать закреплённые", callback_data="adm:edit_permanent_list")],
         [InlineKeyboardButton(text="✏️ Редактировать тренировки месяца", callback_data="adm:edit_weekly_list")],
-        [InlineKeyboardButton(text="✏️ Редактировать лекции", callback_data="adm:edit_lecture_list")],
+        [InlineKeyboardButton(text="✏️ Редактировать информацию по питанию", callback_data="adm:edit_lecture_list")],
+        [InlineKeyboardButton(text="📋 Добавить доп. информацию", callback_data="adm:add_extra")],
+        [InlineKeyboardButton(text="✏️ Редактировать доп. информацию", callback_data="adm:edit_extra_list")],
         [InlineKeyboardButton(text="✅ Активировать подписку", callback_data="adm:activate")],
         [InlineKeyboardButton(text="👥 Список пользователей", callback_data="adm:users")],
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="adm:broadcast")],
@@ -251,7 +266,7 @@ async def cb_lectures(callback: types.CallbackQuery):
     lectures = get_nutrition_lectures()
 
     if not lectures:
-        text = "📭 Лекции по питанию пока не добавлены.\n\nСкоро здесь появятся материалы 🍎"
+        text = "📭 Материалы по питанию пока не добавлены.\n\nСкоро здесь появятся материалы 🍎"
         kb = back_keyboard()
     else:
         buttons = []
@@ -261,7 +276,7 @@ async def cb_lectures(callback: types.CallbackQuery):
                 callback_data=f"lec:{lec['id']}"
             )])
         buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back")])
-        text = "🍎 <b>Лекции по питанию</b>\n\nДоступны всем бесплатно:\n\n"
+        text = "🍎 <b>Информация по питанию</b>\n\nДоступны всем бесплатно:\n\n"
         text += "\n".join(f"• {lec['title']}" for lec in lectures)
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -372,24 +387,6 @@ async def cb_complete(callback: types.CallbackQuery):
     await cb_show_workout(callback)
 
 
-@dp.callback_query(F.data == "progress")
-async def cb_progress(callback: types.CallbackQuery):
-    uid = callback.from_user.id
-    with get_db() as conn:
-        perm = conn.execute('SELECT COUNT(*) FROM completed_workouts WHERE user_id=? AND workout_type="permanent"', (uid,)).fetchone()[0]
-        week = conn.execute('SELECT COUNT(*) FROM completed_workouts WHERE user_id=? AND workout_type="weekly"', (uid,)).fetchone()[0]
-
-    text = "📊 <b>Твой прогресс</b>\n\n"
-    text += f"🏋️ Постоянных тренировок выполнено: <b>{perm}</b>\n"
-    if is_subscribed(uid):
-        text += f"📅 Тренировок месяца выполнено: <b>{week}</b>\n"
-        text += f"⏳ Осталось дней подписки: <b>{get_subscription_days_left(uid)}</b>\n"
-    else:
-        text += "\n💎 Купи подписку, чтобы получить доступ к новым тренировкам!"
-
-    await callback.message.edit_text(text, reply_markup=back_keyboard(), parse_mode="HTML")
-    await callback.answer()
-
 
 @dp.callback_query(F.data == "sub_info")
 async def cb_sub_info(callback: types.CallbackQuery):
@@ -401,6 +398,25 @@ async def cb_sub_info(callback: types.CallbackQuery):
 async def cb_help(callback: types.CallbackQuery):
     days_names = ["ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ", "ВС"]
     days_str = ", ".join(days_names[d] for d in SCHEDULE_DAYS)
+    text = (
+        "❓ <b>Помощь</b>\n\n"
+        "Как пользоваться ботом:\n"
+        "1. Выбери раздел в меню\n"
+        "2. Нажми на тренировку или материал для просмотра\n"
+        "3. После выполнения тренировки отметь её ✅\n\n"
+        f"📅 Тренировки выходят по расписанию: {days_str} в {SCHEDULE_TIME}\n"
+        "🔄 Контент обновляется каждый месяц\n\n"
+        "📏 В разделе «Прогресс» можно отслеживать параметры тела и добавлять фото\n\n"
+        "По вопросам подписки и оплаты: @admin\n"
+        "⚙️ По техническим вопросам: @rom_la"
+    )
+    try:
+        await callback.message.edit_text(text, reply_markup=back_keyboard(), parse_mode="HTML")
+    except Exception:
+        await callback.message.delete()
+        await callback.message.answer(text, reply_markup=back_keyboard(), parse_mode="HTML")
+    await callback.answer()
+
     text = (
         "❓ <b>Помощь</b>\n\n"
         "Как пользоваться ботом:\n"
@@ -509,6 +525,250 @@ async def successful_payment(message: types.Message):
             pass
 
 
+# ========== ДОПОЛНИТЕЛЬНАЯ ИНФОРМАЦИЯ ==========
+
+@dp.callback_query(F.data == "extra")
+async def cb_extra(callback: types.CallbackQuery):
+    materials = get_extra_materials()
+    if not materials:
+        try:
+            await callback.message.edit_text(
+                "📭 Дополнительные материалы пока не добавлены.",
+                reply_markup=back_keyboard()
+            )
+        except Exception:
+            await callback.message.delete()
+            await callback.message.answer("📭 Дополнительные материалы пока не добавлены.", reply_markup=back_keyboard())
+        await callback.answer()
+        return
+
+    buttons = [[InlineKeyboardButton(text=f"📋 {m['title']}", callback_data=f"ext:{m['id']}")] for m in materials]
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back")])
+    text = "📋 <b>Дополнительная информация</b>\n\n" + "\n".join(f"• {m['title']}" for m in materials)
+    try:
+        await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+    except Exception:
+        await callback.message.delete()
+        await callback.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("ext:"))
+async def cb_show_extra(callback: types.CallbackQuery):
+    material_id = int(callback.data.split(":")[1])
+    m = get_extra_material(material_id)
+    if not m:
+        await callback.answer("Материал не найден")
+        return
+
+    text = f"📋 <b>{m['title']}</b>\n\n"
+    if m["description"]:
+        text += f"📝 {m['description']}\n"
+
+    buttons = []
+    if m["video_url"]:
+        buttons.append([InlineKeyboardButton(text="📎 Открыть материал", url=m["video_url"])])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="extra")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    media_id = m["media_file_id"] if "media_file_id" in m.keys() else None
+    media_type = m["media_type"] if "media_type" in m.keys() else None
+
+    if media_id:
+        await callback.message.delete()
+        if media_type == "photo":
+            await bot.send_photo(callback.from_user.id, media_id, caption=text, reply_markup=kb, parse_mode="HTML")
+        elif media_type == "video":
+            await bot.send_video(callback.from_user.id, media_id, caption=text, reply_markup=kb, parse_mode="HTML")
+        elif media_type == "video_note":
+            await bot.send_video_note(callback.from_user.id, media_id)
+            await bot.send_message(callback.from_user.id, text, reply_markup=kb, parse_mode="HTML")
+        else:
+            await bot.send_animation(callback.from_user.id, media_id, caption=text, reply_markup=kb, parse_mode="HTML")
+    else:
+        try:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            await callback.message.delete()
+            await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+# ========== ПРОГРЕСС ==========
+
+@dp.callback_query(F.data == "progress")
+async def cb_progress(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    with get_db() as conn:
+        perm = conn.execute('SELECT COUNT(*) FROM completed_workouts WHERE user_id=? AND workout_type="permanent"', (uid,)).fetchone()[0]
+        week = conn.execute('SELECT COUNT(*) FROM completed_workouts WHERE user_id=? AND workout_type="weekly"', (uid,)).fetchone()[0]
+
+    params = get_body_params(uid)
+    photo = get_progress_photo(uid)
+
+    text = "📊 <b>Мой прогресс</b>\n\n"
+    text += f"🏋️ Закреплённых выполнено: <b>{perm}</b>\n"
+    if is_subscribed(uid):
+        text += f"⭐ Тренировок месяца выполнено: <b>{week}</b>\n"
+        text += f"⏳ Осталось дней подписки: <b>{get_subscription_days_left(uid)}</b>\n"
+
+    text += "\n📏 <b>Мои параметры:</b>\n"
+    if params:
+        fields = [
+            ("Вес", params["weight"], "кг"),
+            ("Грудь", params["chest"], "см"),
+            ("Талия", params["waist"], "см"),
+            ("Бёдра", params["hips"], "см"),
+            ("Рука", params["arm"], "см"),
+            ("Бедро", params["thigh"], "см"),
+        ]
+        has_any = False
+        for name, val, unit in fields:
+            if val:
+                text += f"• {name}: <b>{val} {unit}</b>\n"
+                has_any = True
+        if not has_any:
+            text += "<i>Параметры не заполнены</i>\n"
+        if params["updated_at"]:
+            text += f"\n<i>Обновлено: {params['updated_at'][:10]}</i>"
+    else:
+        text += "<i>Параметры не заполнены</i>\n"
+
+    buttons = [
+        [InlineKeyboardButton(text="📏 Обновить параметры", callback_data="progress:params")],
+        [InlineKeyboardButton(text="📸 Загрузить фото прогресса", callback_data="progress:photo")],
+    ]
+    if photo:
+        buttons.append([InlineKeyboardButton(text="🖼️ Посмотреть моё фото", callback_data="progress:view_photo")])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back")])
+
+    try:
+        await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+    except Exception:
+        await callback.message.delete()
+        await callback.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "progress:params")
+async def cb_progress_params(callback: types.CallbackQuery, state: FSMContext):
+    uid = callback.from_user.id
+    params = get_body_params(uid)
+    current = ""
+    if params:
+        parts = []
+        if params["weight"]: parts.append(f"вес {params['weight']} кг")
+        if params["waist"]: parts.append(f"талия {params['waist']} см")
+        if parts:
+            current = f"\n<i>Сейчас: {', '.join(parts)}</i>"
+
+    await state.set_state(BodyParamsState.waiting)
+    await callback.message.edit_text(
+        f"📏 <b>Обновить параметры тела</b>{current}\n\n"
+        "Введи параметры в любом удобном формате, например:\n\n"
+        "<code>вес 65\nталия 70\nгрудь 90\nбёдра 95\nрука 28\nбедро 55</code>\n\n"
+        "Можно указать только те параметры которые хочешь обновить.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="progress")]
+        ]),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@dp.message(BodyParamsState.waiting)
+async def cb_save_params(message: types.Message, state: FSMContext):
+    import re
+    uid = message.from_user.id
+    text = message.text.lower()
+
+    params = {}
+    patterns = {
+        'weight': r'вес\s*([\d.,]+)',
+        'chest': r'груд[ьб]\s*([\d.,]+)',
+        'waist': r'талия\s*([\d.,]+)',
+        'hips': r'бёдр[аы]\s*([\d.,]+)|бедра\s*([\d.,]+)',
+        'arm': r'рук[аи]\s*([\d.,]+)',
+        'thigh': r'бедр[оа]\s*([\d.,]+)',
+    }
+    for field, pattern in patterns.items():
+        m = re.search(pattern, text)
+        if m:
+            val = next(v for v in m.groups() if v) if '(' in pattern else m.group(1)
+            params[field] = float(val.replace(',', '.'))
+
+    if not params:
+        await message.answer(
+            "❌ Не удалось распознать параметры. Попробуй в формате:\n"
+            "<code>вес 65\nталия 70</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    save_body_params(uid, params)
+    await state.clear()
+    names = {"weight": "Вес", "chest": "Грудь", "waist": "Талия", "hips": "Бёдра", "arm": "Рука", "thigh": "Бедро"}
+    saved = "\n".join(f"• {names[k]}: {v}" for k, v in params.items())
+    await message.answer(
+        f"✅ <b>Параметры сохранены!</b>\n\n{saved}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ К прогрессу", callback_data="progress")]
+        ]),
+        parse_mode="HTML"
+    )
+
+
+@dp.callback_query(F.data == "progress:photo")
+async def cb_progress_photo_prompt(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(BodyParamsState.waiting)
+    await state.update_data(waiting_for="photo")
+    await callback.message.edit_text(
+        "📸 <b>Фото прогресса</b>\n\n"
+        "Пришли фотографию — она будет сохранена как твоё текущее фото прогресса.\n\n"
+        "<i>Фото хранится только в боте и видно только тебе.</i>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="progress")]
+        ]),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@dp.message(BodyParamsState.waiting, F.photo)
+async def cb_save_progress_photo(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    if data.get("waiting_for") == "photo":
+        save_progress_photo(message.from_user.id, message.photo[-1].file_id)
+        await state.clear()
+        await message.answer(
+            "✅ Фото прогресса сохранено!",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ К прогрессу", callback_data="progress")]
+            ])
+        )
+    else:
+        # Это не шаг фото — передаём обработчику параметров
+        await cb_save_params(message, state)
+
+
+@dp.callback_query(F.data == "progress:view_photo")
+async def cb_view_progress_photo(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    photo = get_progress_photo(uid)
+    if not photo:
+        await callback.answer("Фото не найдено", show_alert=True)
+        return
+    await callback.message.delete()
+    await bot.send_photo(
+        uid, photo["file_id"],
+        caption="🖼️ Твоё фото прогресса",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ К прогрессу", callback_data="progress")]
+        ])
+    )
+    await callback.answer()
+
+
 # ========== ADMIN CALLBACKS ==========
 
 @dp.callback_query(F.data == "adm:help")
@@ -528,7 +788,7 @@ async def adm_help(callback: types.CallbackQuery):
         "Каждый вс/вт/чт в 20:00 бот берёт следующую из очереди и рассылает подписчикам. "
         "Накануне в 12:00 ты получишь предупреждение если очередь пуста.\n\n"
 
-        "🍎 <b>Лекции по питанию</b>\n"
+        "🍎 <b>Информация по питанию</b>\n"
         "Доступны всем без подписки. Добавляй ссылки на Google Drive с видео или PDF. "
         "Можно прикрепить фото/видео которое будет показываться при открытии лекции.\n\n"
 
@@ -991,7 +1251,92 @@ async def _save_lecture(target, state: FSMContext, answer_method="answer"):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
     ])
-    text = f"✅ Лекция «<b>{title}</b>» добавлена!"
+    text = f"✅ Материал «<b>{title}</b>» добавлен!"
+    if answer_method == "edit":
+        await target.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await target.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+# --- Добавить доп. информацию (аналог лекций) ---
+
+@dp.callback_query(F.data == "adm:add_extra")
+async def adm_add_extra_start(callback: types.CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await state.set_state(AddExtraState.url)
+    await callback.message.edit_text(
+        "📋 <b>Новый доп. материал</b>\n\n"
+        "Пришли <b>ссылку на материал</b> (Google Drive, YouTube и т.д.)\n"
+        "или нажми «⏭️ Пропустить»:",
+        reply_markup=skip_keyboard(), parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "adm:lec_skip", AddExtraState.url)
+async def ae_url_skip(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(video_url=None)
+    await state.set_state(AddExtraState.title)
+    await callback.message.edit_text("Введи <b>название</b> материала:", reply_markup=cancel_keyboard(), parse_mode="HTML")
+    await callback.answer()
+
+
+@dp.message(AddExtraState.url)
+async def ae_url(message: types.Message, state: FSMContext):
+    await state.update_data(video_url=message.text.strip())
+    await state.set_state(AddExtraState.title)
+    await message.answer("Введи <b>название</b> материала:", reply_markup=cancel_keyboard(), parse_mode="HTML")
+
+
+@dp.message(AddExtraState.title)
+async def ae_title(message: types.Message, state: FSMContext):
+    await state.update_data(title=message.text.strip())
+    await state.set_state(AddExtraState.description)
+    await message.answer("Введи <b>описание</b> или нажми «⏭️ Пропустить»:", reply_markup=skip_keyboard(), parse_mode="HTML")
+
+
+@dp.callback_query(F.data == "adm:lec_skip", AddExtraState.description)
+async def ae_desc_skip(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(description=None)
+    await state.set_state(AddExtraState.media)
+    await callback.message.edit_text("🖼️ Пришли <b>фото, GIF или видео</b> или нажми «⏭️ Пропустить»:", reply_markup=skip_keyboard(), parse_mode="HTML")
+    await callback.answer()
+
+
+@dp.message(AddExtraState.description)
+async def ae_desc(message: types.Message, state: FSMContext):
+    await state.update_data(description=message.text.strip())
+    await state.set_state(AddExtraState.media)
+    await message.answer("🖼️ Пришли <b>фото, GIF или видео</b> или нажми «⏭️ Пропустить»:", reply_markup=skip_keyboard(), parse_mode="HTML")
+
+
+@dp.message(AddExtraState.media, F.animation | F.photo | F.video | F.video_note | F.document)
+async def ae_media(message: types.Message, state: FSMContext):
+    file_id, media_type = _get_media_from_message(message)
+    if not file_id:
+        await message.answer("❌ Не удалось распознать файл:", reply_markup=skip_keyboard())
+        return
+    await state.update_data(media_file_id=file_id, media_type=media_type)
+    await _save_extra(message, state, answer_method="answer")
+
+
+@dp.callback_query(F.data == "adm:lec_skip", AddExtraState.media)
+async def ae_media_skip(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(media_file_id=None, media_type=None)
+    await _save_extra(callback.message, state, answer_method="edit")
+    await callback.answer()
+
+
+async def _save_extra(target, state: FSMContext, answer_method="answer"):
+    data = await state.get_data()
+    title = data.get("title") or "Материал"
+    add_extra_material(title, data.get("description"), data.get("video_url"),
+                       media_file_id=data.get("media_file_id"), media_type=data.get("media_type"))
+    await state.clear()
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]])
+    text = f"✅ Материал «<b>{title}</b>» добавлен!"
     if answer_method == "edit":
         await target.edit_text(text, reply_markup=kb, parse_mode="HTML")
     else:
@@ -999,7 +1344,7 @@ async def _save_lecture(target, state: FSMContext, answer_method="answer"):
 
 
 # ========== РЕДАКТИРОВАНИЕ КОНТЕНТА (закреплённые/месяц/лекции) ==========
-# content_type: "permanent" | "weekly" | "lecture"
+# content_type: "permanent" | "weekly" | "lecture" | "extra"
 
 CONTENT_CONFIG = {
     "permanent": {
@@ -1021,13 +1366,22 @@ CONTENT_CONFIG = {
                    ("video_url", "Ссылка на видео")],
     },
     "lecture": {
-        "title": "Лекции по питанию",
+        "title": "Информация по питанию",
         "get_list": get_nutrition_lectures,
         "get_one": get_nutrition_lecture,
         "update": update_nutrition_lecture,
         "delete": delete_nutrition_lecture,
         "fields": [("title", "Название"), ("description", "Описание"),
-                   ("video_url", "Ссылка на видео"), ("pdf_url", "Ссылка на PDF (Google Drive)"), ("media_file_id", "GIF-анимация (file_id)")],
+                   ("video_url", "Ссылка на видео"), ("pdf_url", "Ссылка на PDF (Google Drive)"), ("media_file_id", "Медиа (фото/GIF/видео)")],
+    },
+    "extra": {
+        "title": "Дополнительная информация",
+        "get_list": get_extra_materials,
+        "get_one": get_extra_material,
+        "update": update_extra_material,
+        "delete": delete_extra_material,
+        "fields": [("title", "Название"), ("description", "Описание"),
+                   ("video_url", "Ссылка на материал"), ("media_file_id", "Медиа (фото/GIF/видео)")],
     },
 }
 
@@ -1210,7 +1564,7 @@ async def adm_delete_item_confirm(callback: types.CallbackQuery):
         await callback.answer()
         return
     _, _, content_type, item_id = callback.data.split(":")
-    type_names = {"permanent": "закреплённую тренировку", "weekly": "тренировку месяца", "lecture": "лекцию по питанию"}
+    type_names = {"permanent": "закреплённую тренировку", "weekly": "тренировку месяца", "lecture": "материал по питанию", "extra": "дополнительный материал"}
     type_name = type_names.get(content_type, "элемент")
     await callback.message.edit_text(
         f"🗑️ <b>Удаление</b>\n\n"
