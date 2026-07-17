@@ -117,7 +117,7 @@ def init_db():
         conn.execute('''
             CREATE TABLE IF NOT EXISTS progress_photos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER UNIQUE,
+                user_id INTEGER,
                 file_id TEXT,
                 uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
@@ -416,15 +416,22 @@ def get_body_params(user_id):
         return conn.execute('SELECT * FROM body_params WHERE user_id=?', (user_id,)).fetchone()
 
 def save_progress_photo(user_id, file_id):
-    """Сохраняет последнее фото прогресса."""
+    """Добавляет новое фото прогресса (история сохраняется)."""
     with get_db() as conn:
-        existing = conn.execute('SELECT id FROM progress_photos WHERE user_id=?', (user_id,)).fetchone()
-        if existing:
-            conn.execute('UPDATE progress_photos SET file_id=?, uploaded_at=CURRENT_TIMESTAMP WHERE user_id=?',
-                        (file_id, user_id))
-        else:
-            conn.execute('INSERT INTO progress_photos (user_id, file_id) VALUES (?,?)', (user_id, file_id))
+        conn.execute('INSERT INTO progress_photos (user_id, file_id) VALUES (?,?)', (user_id, file_id))
 
 def get_progress_photo(user_id):
+    """Возвращает последнее загруженное фото."""
     with get_db() as conn:
-        return conn.execute('SELECT * FROM progress_photos WHERE user_id=?', (user_id,)).fetchone()
+        return conn.execute(
+            'SELECT * FROM progress_photos WHERE user_id=? ORDER BY uploaded_at DESC LIMIT 1',
+            (user_id,)
+        ).fetchone()
+
+def get_progress_photos(user_id, limit=10):
+    """Возвращает все фото прогресса (от новых к старым)."""
+    with get_db() as conn:
+        return conn.execute(
+            'SELECT * FROM progress_photos WHERE user_id=? ORDER BY uploaded_at DESC LIMIT ?',
+            (user_id, limit)
+        ).fetchall()
