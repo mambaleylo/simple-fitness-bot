@@ -29,7 +29,8 @@ from database import (
     update_nutrition_lecture,
     get_extra_materials, get_extra_material, add_extra_material,
     update_extra_material, delete_extra_material,
-    save_body_params, get_body_params, save_progress_photo, get_progress_photo
+    save_body_params, get_body_params, save_progress_photo, get_progress_photo,
+    get_body_params_history
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -413,7 +414,7 @@ async def cb_help(callback: types.CallbackQuery):
         f"📅 Тренировки выходят по расписанию: {days_str} в {SCHEDULE_TIME}\n"
         "🔄 Контент обновляется каждый месяц\n\n"
         "📏 В разделе «Прогресс» можно отслеживать параметры тела и добавлять фото\n\n"
-        "По вопросам подписки и оплаты: @admin\n"
+        "По вопросам подписки и оплаты: @rom_la\n"
         "⚙️ По техническим вопросам: @rom_la"
     )
     try:
@@ -431,7 +432,7 @@ async def cb_help(callback: types.CallbackQuery):
         "3. После выполнения отметь её ✅\n\n"
         f"📅 Новые тренировки выходят: {days_str} в {SCHEDULE_TIME}\n"
         "🔄 В конце каждого месяца контент обновляется\n\n"
-        "По вопросам: @admin"
+        "По вопросам: @rom_la"
     )
     await callback.message.edit_text(text, reply_markup=back_keyboard(), parse_mode="HTML")
     await callback.answer()
@@ -452,7 +453,7 @@ async def cb_buy_sub(callback: types.CallbackQuery):
             "• Новые тренировки каждую неделю\n"
             "• Доступ ко всем материалам месяца\n"
             "• Автоматические уведомления\n\n"
-            "Для оплаты напишите администратору: @admin"
+            "Для оплаты напишите администратору: @rom_la"
         )
         await callback.message.edit_text(text, reply_markup=back_keyboard(), parse_mode="HTML")
         await callback.answer()
@@ -610,6 +611,7 @@ async def cb_progress(callback: types.CallbackQuery):
         week = conn.execute('SELECT COUNT(*) FROM completed_workouts WHERE user_id=? AND workout_type="weekly"', (uid,)).fetchone()[0]
 
     params = get_body_params(uid)
+    history = get_body_params_history(uid, limit=5)
     photo = get_progress_photo(uid)
 
     text = "📊 <b>Мой прогресс</b>\n\n"
@@ -618,20 +620,31 @@ async def cb_progress(callback: types.CallbackQuery):
         text += f"⭐ Тренировок месяца выполнено: <b>{week}</b>\n"
         text += f"⏳ Осталось дней подписки: <b>{get_subscription_days_left(uid)}</b>\n"
 
-    text += "\n📏 <b>Мои параметры:</b>\n"
+    text += "\n📏 <b>Текущие параметры:</b>\n"
+    PARAM_LABELS = [
+        ("weight", "Вес", "кг"),
+        ("chest", "Грудь", "см"),
+        ("waist", "Талия", "см"),
+        ("hips", "Бёдра", "см"),
+        ("arm", "Рука", "см"),
+        ("thigh", "Бедро", "см"),
+    ]
+
     if params:
-        fields = [
-            ("Вес", params["weight"], "кг"),
-            ("Грудь", params["chest"], "см"),
-            ("Талия", params["waist"], "см"),
-            ("Бёдра", params["hips"], "см"),
-            ("Рука", params["arm"], "см"),
-            ("Бедро", params["thigh"], "см"),
-        ]
+        # Берём предыдущую запись для сравнения
+        prev = history[1] if len(history) > 1 else None
         has_any = False
-        for name, val, unit in fields:
+        for field, name, unit in PARAM_LABELS:
+            val = params[field]
             if val:
-                text += f"• {name}: <b>{val} {unit}</b>\n"
+                diff = ""
+                if prev and prev[field]:
+                    delta = round(val - prev[field], 1)
+                    if delta > 0:
+                        diff = f" <i>(+{delta})</i>"
+                    elif delta < 0:
+                        diff = f" <i>({delta})</i>"
+                text += f"• {name}: <b>{val} {unit}</b>{diff}\n"
                 has_any = True
         if not has_any:
             text += "<i>Параметры не заполнены</i>\n"
@@ -639,6 +652,18 @@ async def cb_progress(callback: types.CallbackQuery):
             text += f"\n<i>Обновлено: {params['updated_at'][:10]}</i>"
     else:
         text += "<i>Параметры не заполнены</i>\n"
+
+    # История замеров
+    if len(history) > 1:
+        text += "\n\n📈 <b>История замеров:</b>\n"
+        for rec in history[:4]:
+            date = rec["recorded_at"][:10] if rec["recorded_at"] else "—"
+            parts = []
+            if rec["weight"]: parts.append(f"вес {rec['weight']} кг")
+            if rec["waist"]: parts.append(f"талия {rec['waist']} см")
+            if rec["hips"]: parts.append(f"бёдра {rec['hips']} см")
+            if parts:
+                text += f"<i>{date}: {', '.join(parts)}</i>\n"
 
     buttons = [
         [InlineKeyboardButton(text="📏 Обновить параметры", callback_data="progress:params")],
