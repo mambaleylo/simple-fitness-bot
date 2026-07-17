@@ -102,6 +102,19 @@ def init_db():
             )
         ''')
         conn.execute('''
+            CREATE TABLE IF NOT EXISTS body_params_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                weight REAL,
+                chest REAL,
+                waist REAL,
+                hips REAL,
+                arm REAL,
+                thigh REAL,
+                recorded_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.execute('''
             CREATE TABLE IF NOT EXISTS progress_photos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER UNIQUE,
@@ -371,7 +384,7 @@ def delete_extra_material(material_id):
 # ========== ПАРАМЕТРЫ ТЕЛА ==========
 
 def save_body_params(user_id, params: dict):
-    """Сохраняет замеры тела. params — словарь {поле: значение}."""
+    """Сохраняет замеры тела и добавляет запись в историю."""
     with get_db() as conn:
         existing = conn.execute('SELECT id FROM body_params WHERE user_id=?', (user_id,)).fetchone()
         if existing:
@@ -383,6 +396,20 @@ def save_body_params(user_id, params: dict):
             placeholders = ', '.join(['?'] * (1 + len(params)))
             conn.execute(f'INSERT INTO body_params ({fields}) VALUES ({placeholders})',
                         [user_id] + list(params.values()))
+        # Сохраняем в историю
+        h_fields = ', '.join(['user_id'] + list(params.keys()))
+        h_placeholders = ', '.join(['?'] * (1 + len(params)))
+        conn.execute(f'INSERT INTO body_params_history ({h_fields}) VALUES ({h_placeholders})',
+                    [user_id] + list(params.values()))
+
+
+def get_body_params_history(user_id, limit=5):
+    """Возвращает последние N записей истории параметров."""
+    with get_db() as conn:
+        return conn.execute(
+            'SELECT * FROM body_params_history WHERE user_id=? ORDER BY recorded_at DESC LIMIT ?',
+            (user_id, limit)
+        ).fetchall()
 
 def get_body_params(user_id):
     with get_db() as conn:
