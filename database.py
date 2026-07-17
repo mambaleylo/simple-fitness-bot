@@ -76,6 +76,40 @@ def init_db():
             )
         ''')
 
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS extra_materials (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT,
+                video_url TEXT,
+                media_file_id TEXT,
+                media_type TEXT,
+                pdf_url TEXT,
+                order_num INTEGER
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS body_params (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER UNIQUE,
+                weight REAL,
+                chest REAL,
+                waist REAL,
+                hips REAL,
+                arm REAL,
+                thigh REAL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS progress_photos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER UNIQUE,
+                file_id TEXT,
+                uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
         # Миграции — добавляем недостающие колонки в уже существующие таблицы
         migrations = [
             ("nutrition_lectures", "pdf_url",    "ALTER TABLE nutrition_lectures ADD COLUMN pdf_url TEXT"),
@@ -301,3 +335,69 @@ def delete_nutrition_lecture(lecture_id):
 
 
 init_db()
+
+
+# ========== ДОПОЛНИТЕЛЬНАЯ ИНФОРМАЦИЯ (отдельный раздел, как лекции) ==========
+
+def get_extra_materials():
+    with get_db() as conn:
+        return conn.execute('SELECT * FROM extra_materials ORDER BY order_num, id').fetchall()
+
+def get_extra_material(material_id):
+    with get_db() as conn:
+        return conn.execute('SELECT * FROM extra_materials WHERE id=?', (material_id,)).fetchone()
+
+def add_extra_material(title, description, video_url, media_file_id=None, media_type=None, pdf_url=None):
+    with get_db() as conn:
+        row = conn.execute('SELECT COALESCE(MAX(order_num), 0) + 1 AS n FROM extra_materials').fetchone()
+        conn.execute(
+            'INSERT INTO extra_materials (title, description, video_url, media_file_id, media_type, pdf_url, order_num) VALUES (?,?,?,?,?,?,?)',
+            (title, description, video_url, media_file_id, media_type, pdf_url, row['n'])
+        )
+
+EXTRA_ALLOWED_FIELDS = {"title", "description", "video_url", "media_file_id", "media_type", "pdf_url", "order_num"}
+
+def update_extra_material(material_id, field, value):
+    if field not in EXTRA_ALLOWED_FIELDS:
+        raise ValueError(f"Недопустимое поле: {field}")
+    with get_db() as conn:
+        conn.execute(f'UPDATE extra_materials SET {field}=? WHERE id=?', (value, material_id))
+
+def delete_extra_material(material_id):
+    with get_db() as conn:
+        conn.execute('DELETE FROM extra_materials WHERE id=?', (material_id,))
+
+
+# ========== ПАРАМЕТРЫ ТЕЛА ==========
+
+def save_body_params(user_id, params: dict):
+    """Сохраняет замеры тела. params — словарь {поле: значение}."""
+    with get_db() as conn:
+        existing = conn.execute('SELECT id FROM body_params WHERE user_id=?', (user_id,)).fetchone()
+        if existing:
+            sets = ', '.join(f'{k}=?' for k in params)
+            conn.execute(f'UPDATE body_params SET {sets}, updated_at=CURRENT_TIMESTAMP WHERE user_id=?',
+                        list(params.values()) + [user_id])
+        else:
+            fields = ', '.join(['user_id'] + list(params.keys()))
+            placeholders = ', '.join(['?'] * (1 + len(params)))
+            conn.execute(f'INSERT INTO body_params ({fields}) VALUES ({placeholders})',
+                        [user_id] + list(params.values()))
+
+def get_body_params(user_id):
+    with get_db() as conn:
+        return conn.execute('SELECT * FROM body_params WHERE user_id=?', (user_id,)).fetchone()
+
+def save_progress_photo(user_id, file_id):
+    """Сохраняет последнее фото прогресса."""
+    with get_db() as conn:
+        existing = conn.execute('SELECT id FROM progress_photos WHERE user_id=?', (user_id,)).fetchone()
+        if existing:
+            conn.execute('UPDATE progress_photos SET file_id=?, uploaded_at=CURRENT_TIMESTAMP WHERE user_id=?',
+                        (file_id, user_id))
+        else:
+            conn.execute('INSERT INTO progress_photos (user_id, file_id) VALUES (?,?)', (user_id, file_id))
+
+def get_progress_photo(user_id):
+    with get_db() as conn:
+        return conn.execute('SELECT * FROM progress_photos WHERE user_id=?', (user_id,)).fetchone()
