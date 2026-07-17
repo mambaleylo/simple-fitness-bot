@@ -30,7 +30,7 @@ from database import (
     get_extra_materials, get_extra_material, add_extra_material,
     update_extra_material, delete_extra_material,
     save_body_params, get_body_params, save_progress_photo, get_progress_photo,
-    get_body_params_history
+    get_body_params_history, get_progress_photos
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -612,7 +612,7 @@ async def cb_progress(callback: types.CallbackQuery):
 
     params = get_body_params(uid)
     history = get_body_params_history(uid, limit=5)
-    photo = get_progress_photo(uid)
+    photos = get_progress_photos(uid)
 
     text = "📊 <b>Мой прогресс</b>\n\n"
     text += f"🏋️ Закреплённых выполнено: <b>{perm}</b>\n"
@@ -631,7 +631,6 @@ async def cb_progress(callback: types.CallbackQuery):
     ]
 
     if params:
-        # Берём предыдущую запись для сравнения
         prev = history[1] if len(history) > 1 else None
         has_any = False
         for field, name, unit in PARAM_LABELS:
@@ -653,7 +652,6 @@ async def cb_progress(callback: types.CallbackQuery):
     else:
         text += "<i>Параметры не заполнены</i>\n"
 
-    # История замеров
     if len(history) > 1:
         text += "\n\n📈 <b>История замеров:</b>\n"
         for rec in history[:4]:
@@ -665,12 +663,17 @@ async def cb_progress(callback: types.CallbackQuery):
             if parts:
                 text += f"<i>{date}: {', '.join(parts)}</i>\n"
 
+    if photos:
+        text += f"\n📸 Фото прогресса: <b>{len(photos)} шт.</b>"
+
     buttons = [
         [InlineKeyboardButton(text="📏 Обновить параметры", callback_data="progress:params")],
-        [InlineKeyboardButton(text="📸 Загрузить фото прогресса", callback_data="progress:photo")],
+        [InlineKeyboardButton(text="📸 Добавить фото прогресса", callback_data="progress:photo")],
     ]
-    if photo:
-        buttons.append([InlineKeyboardButton(text="🖼️ Посмотреть моё фото", callback_data="progress:view_photo")])
+    if len(photos) >= 2:
+        buttons.append([InlineKeyboardButton(text=f"🔄 Сравнить до/после ({len(photos)} фото)", callback_data="progress:compare")])
+    elif len(photos) == 1:
+        buttons.append([InlineKeyboardButton(text="🖼️ Посмотреть фото", callback_data="progress:view_photo")])
     buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back")])
 
     try:
@@ -842,19 +845,51 @@ async def cb_save_progress_photo(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "progress:view_photo")
 async def cb_view_progress_photo(callback: types.CallbackQuery):
     uid = callback.from_user.id
-    photo = get_progress_photo(uid)
-    if not photo:
+    photos = get_progress_photos(uid, limit=1)
+    if not photos:
         await callback.answer("Фото не найдено", show_alert=True)
         return
     await callback.message.delete()
     await bot.send_photo(
-        uid, photo["file_id"],
-        caption="🖼️ Твоё фото прогресса",
+        uid, photos[0]["file_id"],
+        caption=f"🖼️ Твоё фото ({photos[0]['uploaded_at'][:10]})",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="◀️ К прогрессу", callback_data="progress")]
         ])
     )
     await callback.answer()
+
+
+@dp.callback_query(F.data == "progress:compare")
+async def cb_compare_photos(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    photos = get_progress_photos(uid)
+    if len(photos) < 2:
+        await callback.answer("Нужно минимум 2 фото для сравнения", show_alert=True)
+        return
+
+    await callback.message.delete()
+    # Самое новое фото
+    latest = photos[0]
+    # Самое старое фото
+    oldest = photos[-1]
+
+    await bot.send_photo(
+        uid, oldest["file_id"],
+        caption=f"⬅️ <b>Начало</b> ({oldest['uploaded_at'][:10]})",
+        parse_mode="HTML"
+    )
+    await bot.send_photo(
+        uid, latest["file_id"],
+        caption=f"➡️ <b>Сейчас</b> ({latest['uploaded_at'][:10]})\n\n"
+                f"📸 Всего фото: {len(photos)}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ К прогрессу", callback_data="progress")]
+        ]),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
 
 
 # ========== ADMIN CALLBACKS ==========
