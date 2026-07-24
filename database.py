@@ -444,3 +444,9 @@ def get_progress_photos(user_id, limit=10):
             'SELECT * FROM progress_photos WHERE user_id=? ORDER BY uploaded_at DESC LIMIT ?',
             (user_id, limit)
         ).fetchall()
+
+
+def revoke_subscription(user_id):
+    """Удаляет подписку пользователя."""
+    with get_db() as conn:
+        conn.execute('UPDATE users SET subscribed_until=NULL WHERE user_id=?', (user_id,))
