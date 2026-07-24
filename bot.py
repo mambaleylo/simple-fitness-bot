@@ -30,7 +30,8 @@ from database import (
     get_extra_materials, get_extra_material, add_extra_material,
     update_extra_material, delete_extra_material,
     save_body_params, get_body_params, save_progress_photo, get_progress_photo,
-    get_body_params_history, get_progress_photos, get_user_by_username
+    get_body_params_history, get_progress_photos, get_user_by_username,
+    revoke_subscription
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -78,6 +79,9 @@ class BroadcastState(StatesGroup):
 class ActivateState(StatesGroup):
     user_id = State()
     days = State()
+
+class RevokeState(StatesGroup):
+    user_id = State()
 
 class AddLectureState(StatesGroup):
     title = State()
@@ -134,6 +138,7 @@ def admin_menu():
         [InlineKeyboardButton(text="📋 Добавить доп. информацию", callback_data="adm:add_extra")],
         [InlineKeyboardButton(text="✏️ Редактировать доп. информацию", callback_data="adm:edit_extra_list")],
         [InlineKeyboardButton(text="✅ Активировать подписку", callback_data="adm:activate")],
+        [InlineKeyboardButton(text="❌ Отозвать подписку", callback_data="adm:revoke")],
         [InlineKeyboardButton(text="👥 Список пользователей", callback_data="adm:users")],
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="adm:broadcast")],
         [InlineKeyboardButton(text="🗑️ Очистить старые тренировки", callback_data="adm:cleanup")],
@@ -1148,6 +1153,72 @@ async def adm_cleanup(callback: types.CallbackQuery):
         show_alert=True
     )
     await send_admin_panel(callback, edit=True)
+
+
+@dp.callback_query(F.data == "adm:revoke")
+async def adm_revoke_start(callback: types.CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await state.set_state(RevokeState.user_id)
+    await callback.message.edit_text(
+        "❌ <b>Отозвать подписку</b>\n\n"
+        "Введи <b>@никнейм</b> или <b>Telegram ID</b> пользователя:",
+        reply_markup=cancel_keyboard(), parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@dp.message(RevokeState.user_id)
+async def adm_revoke_uid(message: types.Message, state: FSMContext):
+    text = message.text.strip()
+    uid = None
+    display = text
+
+    if text.lstrip('@').isdigit():
+        uid = int(text.lstrip('@'))
+        display = str(uid)
+    else:
+        user = get_user_by_username(text)
+        if user:
+            uid = user["user_id"]
+            display = f"@{user['username']} (id: {uid})"
+        else:
+            await message.answer(
+                f"❌ Пользователь <code>{text}</code> не найден.",
+                reply_markup=cancel_keyboard(), parse_mode="HTML"
+            )
+            return
+
+    if not is_subscribed(uid):
+        await state.clear()
+        await message.answer(
+            f"ℹ️ У пользователя <b>{display}</b> нет активной подписки.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+            ]),
+            parse_mode="HTML"
+        )
+        return
+
+    revoke_subscription(uid)
+    await state.clear()
+
+    try:
+        await bot.send_message(uid,
+            "ℹ️ Ваша подписка была деактивирована.\n"
+            "По вопросам: @rom_la"
+        )
+    except Exception:
+        pass
+
+    await message.answer(
+        f"✅ Подписка пользователя <b>{display}</b> отозвана.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+        ]),
+        parse_mode="HTML"
+    )
 
 
 @dp.callback_query(F.data == "adm:back")
