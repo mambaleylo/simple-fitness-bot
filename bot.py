@@ -30,7 +30,7 @@ from database import (
     get_extra_materials, get_extra_material, add_extra_material,
     update_extra_material, delete_extra_material,
     save_body_params, get_body_params, save_progress_photo, get_progress_photo,
-    get_body_params_history, get_progress_photos
+    get_body_params_history, get_progress_photos, get_user_by_username
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -1065,8 +1065,7 @@ async def adm_activate_start(callback: types.CallbackQuery, state: FSMContext):
         "✅ <b>Активация подписки</b>\n\n"
         "ℹ️ После активации пользователь получит приветственное сообщение "
         "и доступ к разделу «⭐ Тренировки месяца».\n\n"
-        "Введи <b>Telegram ID</b> пользователя:\n"
-        "<i>(Узнать ID: @userinfobot)</i>",
+        "Введи <b>@никнейм</b> или <b>Telegram ID</b> пользователя:",
         reply_markup=cancel_keyboard(), parse_mode="HTML"
     )
     await callback.answer()
@@ -1074,25 +1073,44 @@ async def adm_activate_start(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.message(ActivateState.user_id)
 async def adm_activate_uid(message: types.Message, state: FSMContext):
-    try:
-        uid = int(message.text.strip())
-        await state.update_data(user_id=uid)
-        await state.set_state(ActivateState.days)
-        await message.answer(
-            f"Пользователь: <code>{uid}</code>\n\nНа сколько дней?",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [
-                    InlineKeyboardButton(text="1 день", callback_data="adm:days:1"),
-                    InlineKeyboardButton(text="30 дней", callback_data="adm:days:30"),
-                    InlineKeyboardButton(text="60 дней", callback_data="adm:days:60"),
-                    InlineKeyboardButton(text="90 дней", callback_data="adm:days:90"),
-                ],
-                [InlineKeyboardButton(text="❌ Отмена", callback_data="adm:cancel")]
-            ]),
-            parse_mode="HTML"
-        )
-    except ValueError:
-        await message.answer("❌ ID должен быть числом. Попробуй ещё раз:", reply_markup=cancel_keyboard())
+    text = message.text.strip()
+    uid = None
+    display = text
+
+    if text.lstrip('@').isdigit():
+        # Это числовой ID
+        uid = int(text.lstrip('@'))
+        display = str(uid)
+    else:
+        # Это никнейм — ищем в базе
+        user = get_user_by_username(text)
+        if user:
+            uid = user["user_id"]
+            display = f"@{user['username']} (id: {uid})"
+        else:
+            await message.answer(
+                f"❌ Пользователь <code>{text}</code> не найден в базе.\n\n"
+                "Пользователь должен сначала запустить бота (/start), "
+                "чтобы появиться в базе.\n\nПопробуй ещё раз:",
+                reply_markup=cancel_keyboard(), parse_mode="HTML"
+            )
+            return
+
+    await state.update_data(user_id=uid)
+    await state.set_state(ActivateState.days)
+    await message.answer(
+        f"👤 Пользователь: <b>{display}</b>\n\nНа сколько дней?",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="1 день", callback_data="adm:days:1"),
+                InlineKeyboardButton(text="30 дней", callback_data="adm:days:30"),
+                InlineKeyboardButton(text="60 дней", callback_data="adm:days:60"),
+                InlineKeyboardButton(text="90 дней", callback_data="adm:days:90"),
+            ],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="adm:cancel")]
+        ]),
+        parse_mode="HTML"
+    )
 
 
 @dp.callback_query(F.data.startswith("adm:days:"))
