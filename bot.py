@@ -496,8 +496,9 @@ async def cb_help(callback: types.CallbackQuery):
 async def cb_buy_sub(callback: types.CallbackQuery):
     uid = callback.from_user.id
 
-    # Если провайдер не настроен — показываем инструкцию
+    # Если провайдер не настроен — показываем кнопку "Я оплатил"
     if not BEPAID_PROVIDER_TOKEN or BEPAID_PROVIDER_TOKEN == "ВСТАВЬ_PROVIDER_TOKEN":
+        username = f"@{callback.from_user.username}" if callback.from_user.username else callback.from_user.first_name
         text = (
             "💎 <b>Подписка на фитнес-бот</b>\n\n"
             f"Цена: <b>{SUBSCRIPTION_PRICE} BYN / {SUBSCRIPTION_DAYS} дней</b>\n\n"
@@ -505,9 +506,17 @@ async def cb_buy_sub(callback: types.CallbackQuery):
             "• Новые тренировки каждую неделю\n"
             "• Доступ ко всем материалам месяца\n"
             "• Автоматические уведомления\n\n"
-            "Для оплаты напишите администратору: @rom_la"
+            f"Для оплаты напиши: @rom_la\n\n"
+            "После оплаты нажми кнопку ниже — я уведомлю тренера:"
         )
-        await callback.message.edit_text(text, reply_markup=back_keyboard(), parse_mode="HTML")
+        await callback.message.edit_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Я оплатил!", callback_data="paid_request")],
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="back")],
+            ]),
+            parse_mode="HTML"
+        )
         await callback.answer()
         return
 
@@ -540,7 +549,97 @@ async def cb_buy_sub(callback: types.CallbackQuery):
     await callback.answer()
 
 
-@dp.pre_checkout_query()
+@dp.callback_query(F.data == "paid_request")
+async def cb_paid_request(callback: types.CallbackQuery):
+    uid = callback.from_user.id
+    user = callback.from_user
+    username = f"@{user.username}" if user.username else f"{user.first_name}"
+    name = user.full_name
+
+    # Сообщение пользователю
+    await callback.message.edit_text(
+        "⏳ <b>Заявка отправлена!</b>\n\n"
+        "Тренер получил уведомление и скоро активирует твою подписку.\n"
+        "Обычно это занимает несколько минут.",
+        reply_markup=back_keyboard(),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+    # Уведомление всем админам с кнопками активации
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(
+                admin_id,
+                f"💰 <b>Новая заявка на подписку!</b>\n\n"
+                f"👤 Имя: {name}\n"
+                f"🔗 Никнейм: {username}\n"
+                f"🆔 ID: <code>{uid}</code>\n\n"
+                f"Если оплата подтверждена — нажми кнопку ниже:",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(text="✅ 30 дней", callback_data=f"approve:{uid}:30"),
+                        InlineKeyboardButton(text="✅ 60 дней", callback_data=f"approve:{uid}:60"),
+                        InlineKeyboardButton(text="✅ 90 дней", callback_data=f"approve:{uid}:90"),
+                    ],
+                    [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject:{uid}")],
+                ]),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+
+
+@dp.callback_query(F.data.startswith("approve:"))
+async def cb_approve_sub(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    _, uid_str, days_str = callback.data.split(":")
+    uid = int(uid_str)
+    days = int(days_str)
+
+    add_user(uid, None)
+    activate_subscription(uid, days)
+
+    # Уведомить пользователя
+    try:
+        await send_welcome(uid, reply_markup=main_menu(uid))
+    except Exception:
+        pass
+
+    await callback.message.edit_text(
+        callback.message.text + f"\n\n✅ <b>Активировано на {days} дней</b>",
+        parse_mode="HTML"
+    )
+    await callback.answer(f"✅ Подписка активирована на {days} дней!")
+
+
+@dp.callback_query(F.data.startswith("reject:"))
+async def cb_reject_sub(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    uid = int(callback.data.split(":")[1])
+
+    try:
+        await bot.send_message(
+            uid,
+            "❌ <b>Заявка отклонена.</b>\n\n"
+            "Если ты уже оплатил — напиши напрямую: @rom_la",
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
+
+    await callback.message.edit_text(
+        callback.message.text + "\n\n❌ <b>Отклонено</b>",
+        parse_mode="HTML"
+    )
+    await callback.answer("Заявка отклонена")
+
+
+
 async def pre_checkout(query: PreCheckoutQuery):
     """Подтверждаем платёж перед списанием."""
     await query.answer(ok=True)
