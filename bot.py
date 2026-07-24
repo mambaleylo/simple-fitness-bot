@@ -197,14 +197,20 @@ async def send_admin_panel(target, edit=False):
 async def cmd_start(message: types.Message):
     uid = message.from_user.id
     add_user(uid, message.from_user.username)
-    await message.answer(
-        f"🔥 Привет, {message.from_user.first_name}!\n\n"
-        "Я твой персональный фитнес-тренер.\n"
-        "Каждую неделю выходят новые тренировки по расписанию.\n"
-        "Постоянные материалы (разминка, заминка и др.) доступны всегда.\n\n"
-        "⬇️ Выбери действие:",
-        reply_markup=main_menu(uid)
-    )
+
+    if is_subscribed(uid):
+        # Премиум пользователь — приветствие с фото
+        await send_welcome(uid, reply_markup=main_menu(uid))
+    else:
+        # Обычный пользователь
+        await message.answer(
+            f"👋 Привет, {message.from_user.first_name}!\n\n"
+            "Здесь есть закреплённые тренировки и информация по питанию — "
+            "они доступны всем бесплатно.\n\n"
+            "Для доступа к тренировкам месяца нужна подписка 💎\n\n"
+            "⬇️ Выбери действие:",
+            reply_markup=main_menu(uid)
+        )
 
 
 @dp.message(Command("admin"))
