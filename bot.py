@@ -15,7 +15,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from config import (
     BOT_TOKEN, SCHEDULE_DAYS, SCHEDULE_TIME, ADMIN_IDS,
     BEPAID_PROVIDER_TOKEN, SUBSCRIPTION_PRICE, SUBSCRIPTION_DAYS,
-    SUBSCRIPTION_WELCOME_TEXT
+    SUBSCRIPTION_WELCOME_TEXT, WELCOME_PHOTO_FILE_ID
 )
 from database import (
     add_user, is_subscribed, get_subscription_days_left,
@@ -39,6 +39,25 @@ bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
+
+async def send_welcome(uid: int, reply_markup=None):
+    """Отправляет приветственное сообщение с фото если настроено."""
+    if WELCOME_PHOTO_FILE_ID:
+        await bot.send_photo(
+            uid,
+            WELCOME_PHOTO_FILE_ID,
+            caption=SUBSCRIPTION_WELCOME_TEXT,
+            reply_markup=reply_markup,
+            parse_mode="HTML"
+        )
+    else:
+        await bot.send_message(
+            uid,
+            SUBSCRIPTION_WELCOME_TEXT,
+            reply_markup=reply_markup,
+            parse_mode="HTML"
+        )
+
 
 
 # ========== FSM STATES ==========
@@ -200,6 +219,33 @@ async def cmd_cancel(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("❌ Действие отменено.",
                          reply_markup=admin_menu() if is_admin(message.from_user.id) else None)
+
+
+@dp.message(Command("getfileid"))
+async def cmd_getfileid(message: types.Message):
+    """Команда для получения file_id фото — только для админов."""
+    if not is_admin(message.from_user.id):
+        return
+    await message.answer(
+        "📎 Пришли фото следующим сообщением — я верну его file_id.\n"
+        "Вставь его в config.py как WELCOME_PHOTO_FILE_ID."
+    )
+
+
+@dp.message(F.photo & F.text.is_(None))
+async def handle_photo_for_fileid(message: types.Message, state: FSMContext):
+    """Если админ прислал фото без состояния FSM — возвращаем file_id."""
+    if not is_admin(message.from_user.id):
+        return
+    current = await state.get_state()
+    if current is not None:
+        return  # в FSM — не перехватываем
+    file_id = message.photo[-1].file_id
+    await message.answer(
+        f"✅ <b>file_id фото:</b>\n<code>{file_id}</code>\n\n"
+        "Вставь это значение в переменную <code>WELCOME_PHOTO_FILE_ID</code> в config.py",
+        parse_mode="HTML"
+    )
 
 
 # ========== USER CALLBACKS ==========
@@ -507,12 +553,8 @@ async def successful_payment(message: types.Message):
 
     activate_subscription(uid, days)
 
-    # Приветственное сообщение от заказчика (текст согласован отдельно)
-    await message.answer(
-        SUBSCRIPTION_WELCOME_TEXT,
-        reply_markup=main_menu(uid),
-        parse_mode="HTML"
-    )
+    # Приветственное сообщение с фото если настроено
+    await send_welcome(uid, reply_markup=main_menu(uid))
 
     # Уведомляем админов
     username = f"@{message.from_user.username}" if message.from_user.username else str(uid)
@@ -1069,7 +1111,7 @@ async def adm_activate_days(callback: types.CallbackQuery, state: FSMContext):
     activate_subscription(uid, days)
     await state.clear()
     try:
-        await bot.send_message(uid, SUBSCRIPTION_WELCOME_TEXT, parse_mode="HTML")
+        await send_welcome(uid)
     except Exception:
         pass
     await callback.message.edit_text(
