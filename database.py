@@ -156,6 +156,15 @@ def get_all_users():
         return conn.execute('SELECT * FROM users ORDER BY joined_at DESC').fetchall()
 
 
+def get_user_by_username(username: str):
+    """Поиск пользователя по юзернейму (без @)."""
+    username = username.lstrip('@').lower()
+    with get_db() as conn:
+        return conn.execute(
+            'SELECT * FROM users WHERE LOWER(username)=?', (username,)
+        ).fetchone()
+
+
 def activate_subscription(user_id, days=30):
     with get_db() as conn:
         row = conn.execute('SELECT subscribed_until FROM users WHERE user_id=?', (user_id,)).fetchone()
