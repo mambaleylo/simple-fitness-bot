@@ -469,3 +469,28 @@ def revoke_subscription(user_id):
     """Удаляет подписку пользователя."""
     with get_db() as conn:
         conn.execute('UPDATE users SET subscribed_until=NULL WHERE user_id=?', (user_id,))
+
+
+# ========== ЗАЯВКИ НА ОПЛАТУ ==========
+
+def save_payment_request(user_id):
+    """Сохраняет время когда пользователь нажал 'Я оплатил'."""
+    with get_db() as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS payment_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            requested_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )''')
+        conn.execute('INSERT INTO payment_requests (user_id) VALUES (?)', (user_id,))
+
+
+def get_last_payment_request(user_id):
+    """Возвращает последнюю заявку пользователя."""
+    with get_db() as conn:
+        try:
+            return conn.execute(
+                'SELECT * FROM payment_requests WHERE user_id=? ORDER BY requested_at DESC LIMIT 1',
+                (user_id,)
+            ).fetchone()
+        except Exception:
+            return None
