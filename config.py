@@ -23,8 +23,8 @@ ADMIN_IDS = [181970023]
 #   3. BotFather выдаст provider_token — вставь его ниже
 BEPAID_PROVIDER_TOKEN = os.getenv("BEPAID_PROVIDER_TOKEN", "ВСТАВЬ_PROVIDER_TOKEN")
 
-# Цена подписки в BYN (белорусских рублях)
-SUBSCRIPTION_PRICE = 10       # 10 BYN за месяц
+# Цена подписки
+SUBSCRIPTION_PRICE = 100      # 100 руб за месяц
 SUBSCRIPTION_DAYS  = 30       # на сколько дней
 
 # ──────────────────────────────────────────
