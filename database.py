@@ -137,6 +137,25 @@ def init_db():
             if col not in existing:
                 conn.execute(sql)
 
+        # Миграция: убрать UNIQUE с user_id в progress_photos чтобы хранить несколько фото
+        # Проверяем через sql схему таблицы
+        schema = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='progress_photos'"
+        ).fetchone()
+        if schema and 'UNIQUE' in (schema[0] or '').upper():
+            # Пересоздаём таблицу без UNIQUE, сохраняя данные
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS progress_photos_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    file_id TEXT,
+                    uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            conn.execute('INSERT INTO progress_photos_new SELECT * FROM progress_photos')
+            conn.execute('DROP TABLE progress_photos')
+            conn.execute('ALTER TABLE progress_photos_new RENAME TO progress_photos')
+
 
 def add_user(user_id, username):
     with get_db() as conn:
