@@ -13,7 +13,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config import (
-    BOT_TOKEN, SCHEDULE_DAYS, SCHEDULE_TIME, ADMIN_IDS,
+    BOT_TOKEN, SCHEDULE_DAYS, SCHEDULE_TIME, ADMIN_IDS, MANAGER_IDS,
     BEPAID_PROVIDER_TOKEN, SUBSCRIPTION_PRICE, SUBSCRIPTION_DAYS,
     SUBSCRIPTION_WELCOME_TEXT, WELCOME_PHOTO_FILE_ID
 )
@@ -593,34 +593,40 @@ async def cb_paid_request(callback: types.CallbackQuery):
     )
     await callback.answer()
 
-    # Уведомление всем админам с кнопками активации
-    for admin_id in ADMIN_IDS:
+    # Уведомление всем админам и менеджерам с кнопками активации
+    notify_ids = list(set(ADMIN_IDS + MANAGER_IDS))
+    payment_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ 30 дней", callback_data=f"approve:{uid}:30"),
+            InlineKeyboardButton(text="✅ 60 дней", callback_data=f"approve:{uid}:60"),
+            InlineKeyboardButton(text="✅ 90 дней", callback_data=f"approve:{uid}:90"),
+        ],
+        [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject:{uid}")],
+    ])
+    for notify_id in notify_ids:
         try:
             await bot.send_message(
-                admin_id,
+                notify_id,
                 f"💰 <b>Новая заявка на подписку!</b>\n\n"
                 f"👤 Имя: {name}\n"
                 f"🔗 Никнейм: {username}\n"
                 f"🆔 ID: <code>{uid}</code>\n\n"
                 f"Если оплата подтверждена — нажми кнопку ниже:",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [
-                        InlineKeyboardButton(text="✅ 30 дней", callback_data=f"approve:{uid}:30"),
-                        InlineKeyboardButton(text="✅ 60 дней", callback_data=f"approve:{uid}:60"),
-                        InlineKeyboardButton(text="✅ 90 дней", callback_data=f"approve:{uid}:90"),
-                    ],
-                    [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject:{uid}")],
-                ]),
+                reply_markup=payment_kb,
                 parse_mode="HTML"
             )
         except Exception:
             pass
 
 
+def is_manager(user_id: int) -> bool:
+    return user_id in MANAGER_IDS or user_id in ADMIN_IDS
+
+
 @dp.callback_query(F.data.startswith("approve:"))
 async def cb_approve_sub(callback: types.CallbackQuery):
-    if not is_admin(callback.from_user.id):
-        await callback.answer()
+    if not is_manager(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
         return
     _, uid_str, days_str = callback.data.split(":")
     uid = int(uid_str)
@@ -635,8 +641,9 @@ async def cb_approve_sub(callback: types.CallbackQuery):
     except Exception:
         pass
 
+    approver = f"@{callback.from_user.username}" if callback.from_user.username else callback.from_user.first_name
     await callback.message.edit_text(
-        callback.message.text + f"\n\n✅ <b>Активировано на {days} дней</b>",
+        callback.message.text + f"\n\n✅ <b>Активировано на {days} дней</b> (одобрил: {approver})",
         parse_mode="HTML"
     )
     await callback.answer(f"✅ Подписка активирована на {days} дней!")
@@ -644,8 +651,8 @@ async def cb_approve_sub(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("reject:"))
 async def cb_reject_sub(callback: types.CallbackQuery):
-    if not is_admin(callback.from_user.id):
-        await callback.answer()
+    if not is_manager(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
         return
     uid = int(callback.data.split(":")[1])
 
