@@ -55,7 +55,7 @@ SUBSCRIPTION_WELCOME_TEXT = (
 # file_id фото для приветственного сообщения.
 # Как получить: напиши боту команду /getfileid и отправь нужное фото —
 # бот вернёт его file_id, вставь сюда.
-WELCOME_PHOTO_FILE_ID = os.getenv("WELCOME_PHOTO_FILE_ID", "")
+WELCOME_PHOTO_FILE_ID = os.getenv("WELCOME_PHOTO_FILE_ID", "AgACAgIAAxkBAAICqWpjZcO6WRQVVM5efaw-l_CwGx5TAAJFGmsbdx8gS9i37Vs_TJciAQADAgADeQADPQQ")
 
 # Папка для базы данных (bothost.ru пробрасывает /app/data как постоянное хранилище)
 DATA_DIR = os.getenv("DATA_DIR", "/app/data")
