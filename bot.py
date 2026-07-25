@@ -232,7 +232,14 @@ async def cmd_cancel(message: types.Message, state: FSMContext):
                          reply_markup=admin_menu() if is_admin(message.from_user.id) else None)
 
 
-@dp.message(Command("getfileid"))
+@dp.message(Command("backup"))
+async def cmd_backup(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+    await message.answer("⏳ Создаю бэкап...")
+    await backup_database()
+
+
 async def cmd_getfileid(message: types.Message, state: FSMContext):
     """Команда для получения file_id фото — только для админов."""
     if not is_admin(message.from_user.id):
@@ -2035,21 +2042,28 @@ async def scheduled_cleanup():
 
 
 async def backup_database():
-    """Еженедельный бэкап базы данных — отправляет файл всем админам."""
+    """Бэкап базы данных — отправляет файл всем админам."""
     import os
-    from config import DATA_DIR
-    db_path = os.path.join(DATA_DIR, "fitbot.db")
+    from database import DB_NAME
+    db_path = DB_NAME
     if not os.path.exists(db_path):
-        return
+        # Пробуем альтернативные пути
+        for alt in ["/app/data/fitbot.db", "./fitbot.db", "/app/fitbot.db"]:
+            if os.path.exists(alt):
+                db_path = alt
+                break
+        else:
+            logging.error(f"Бэкап: файл БД не найден (искали {DB_NAME})")
+            return
     from datetime import datetime
-    date_str = datetime.now().strftime("%Y-%m-%d")
+    date_str = datetime.now().strftime("%Y-%m-%d_%H-%M")
     for admin_id in ADMIN_IDS:
         try:
             with open(db_path, "rb") as f:
                 await bot.send_document(
                     admin_id, f,
                     filename=f"fitbot_backup_{date_str}.db",
-                    caption=f"💾 Еженедельный бэкап базы данных ({date_str})"
+                    caption=f"💾 Бэкап базы данных\n📅 {date_str}\n📦 Путь: {db_path}"
                 )
         except Exception as e:
             logging.error(f"Ошибка бэкапа для {admin_id}: {e}")
