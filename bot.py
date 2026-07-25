@@ -505,14 +505,26 @@ async def cb_buy_sub(callback: types.CallbackQuery):
     if not BEPAID_PROVIDER_TOKEN or BEPAID_PROVIDER_TOKEN == "ВСТАВЬ_PROVIDER_TOKEN":
         username = f"@{callback.from_user.username}" if callback.from_user.username else callback.from_user.first_name
         text = (
-            "💎 <b>Подписка на фитнес-бот</b>\n\n"
+            "💎 <b>Подписка FeelBody</b>\n\n"
             f"Цена: <b>{SUBSCRIPTION_PRICE} BYN / {SUBSCRIPTION_DAYS} дней</b>\n\n"
             "Что включено:\n"
             "• Новые тренировки каждую неделю\n"
             "• Доступ ко всем материалам месяца\n"
+            "• Информация по питанию\n"
             "• Автоматические уведомления\n\n"
-            f"Для оплаты напиши: @rom_la\n\n"
-            "После оплаты нажми кнопку ниже — я уведомлю тренера:"
+            "💳 <b>Реквизиты для оплаты:</b>\n\n"
+            "🇧🇾 <b>Беларусь (ЕРИП):</b>\n"
+            "Система Расчёт → Банковские услуги → Банки/НКФО → Приорбанк → Пополнение платёжной карты\n"
+            "<code>0040081028524</code>\n\n"
+            "🇷🇺 <b>Россия (Сбербанк):</b>\n"
+            "<code>2202208300480606</code>\n\n"
+            "🌍 <b>Другие страны VISA:</b>\n"
+            "<code>4916989646926302</code>\n\n"
+            "🌍 <b>Другие страны MasterCard:</b>\n"
+            "<code>5144210501707039</code>\n\n"
+            "Получатель: <b>Nadzeya Ramanava</b>\n\n"
+            "Если нужны другие реквизиты — напиши @rom_la\n\n"
+            "После оплаты нажми кнопку ниже:"
         )
         await callback.message.edit_text(
             text,
