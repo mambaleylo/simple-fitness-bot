@@ -31,7 +31,7 @@ from database import (
     update_extra_material, delete_extra_material,
     save_body_params, get_body_params, save_progress_photo, get_progress_photo,
     get_body_params_history, get_progress_photos, get_user_by_username,
-    revoke_subscription
+    revoke_subscription, save_payment_request, get_last_payment_request
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -572,6 +572,9 @@ async def cb_paid_request(callback: types.CallbackQuery):
     user = callback.from_user
     username = f"@{user.username}" if user.username else f"{user.first_name}"
     name = user.full_name
+
+    # Сохраняем время заявки
+    save_payment_request(uid)
 
     # Сообщение пользователю
     await callback.message.edit_text(
@@ -1137,7 +1140,13 @@ async def adm_users(callback: types.CallbackQuery):
             days_left = get_subscription_days_left(u["user_id"])
             lines.append(f"⭐ {name} — осталось <b>{days_left} дн.</b> (до {u['subscribed_until']})")
         else:
-            lines.append(f"👤 {name} — без подписки")
+            # Проверяем была ли заявка на оплату
+            req = get_last_payment_request(u["user_id"])
+            if req:
+                dt = req["requested_at"][:16].replace("T", " ") if req["requested_at"] else "—"
+                lines.append(f"💰 {name} — заявка: <b>{dt}</b>")
+            else:
+                lines.append(f"👤 {name} — без подписки")
 
     text = f"👥 <b>Пользователи: {total}</b> (активных подписок: {active})\n\n" + "\n".join(lines)
     if total > 30:
