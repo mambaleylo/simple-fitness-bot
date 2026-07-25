@@ -233,30 +233,30 @@ async def cmd_cancel(message: types.Message, state: FSMContext):
 
 
 @dp.message(Command("getfileid"))
-async def cmd_getfileid(message: types.Message):
+async def cmd_getfileid(message: types.Message, state: FSMContext):
     """Команда для получения file_id фото — только для админов."""
     if not is_admin(message.from_user.id):
         return
+    await state.set_state(EditFieldState.waiting_value)
+    await state.update_data(field="__getfileid__", content_type="", item_id=0)
     await message.answer(
         "📎 Пришли фото следующим сообщением — я верну его file_id.\n"
-        "Вставь его в config.py как WELCOME_PHOTO_FILE_ID."
+        "Вставь его в config.py как WELCOME_PHOTO_FILE_ID.\n\n"
+        "Или /cancel для отмены."
     )
 
 
-@dp.message(F.photo & F.text.is_(None))
-async def handle_photo_for_fileid(message: types.Message, state: FSMContext):
-    """Если админ прислал фото без состояния FSM — возвращаем file_id."""
-    if not is_admin(message.from_user.id):
-        return
-    current = await state.get_state()
-    if current is not None:
-        return  # в FSM — не перехватываем
-    file_id = message.photo[-1].file_id
-    await message.answer(
-        f"✅ <b>file_id фото:</b>\n<code>{file_id}</code>\n\n"
-        "Вставь это значение в переменную <code>WELCOME_PHOTO_FILE_ID</code> в config.py",
-        parse_mode="HTML"
-    )
+@dp.message(EditFieldState.waiting_value, F.photo)
+async def handle_getfileid_photo(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    if data.get("field") == "__getfileid__":
+        file_id = message.photo[-1].file_id
+        await state.clear()
+        await message.answer(
+            f"✅ <b>file_id фото:</b>\n<code>{file_id}</code>\n\n"
+            "Вставь это в <code>WELCOME_PHOTO_FILE_ID</code> в config.py",
+            parse_mode="HTML"
+        )
 
 
 # ========== USER CALLBACKS ==========
@@ -506,7 +506,7 @@ async def cb_buy_sub(callback: types.CallbackQuery):
         username = f"@{callback.from_user.username}" if callback.from_user.username else callback.from_user.first_name
         text = (
             "💎 <b>Подписка FeelBody</b>\n\n"
-            f"Цена: <b>{SUBSCRIPTION_PRICE} BYN / {SUBSCRIPTION_DAYS} дней</b>\n\n"
+            f"Цена: <b>{SUBSCRIPTION_PRICE} руб / {SUBSCRIPTION_DAYS} дней</b>\n\n"
             "Что включено:\n"
             "• Новые тренировки каждую неделю\n"
             "• Доступ ко всем материалам месяца\n"
@@ -559,7 +559,7 @@ async def cb_buy_sub(callback: types.CallbackQuery):
         need_email=False,
         is_flexible=False,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"💳 Оплатить {SUBSCRIPTION_PRICE} BYN", pay=True)],
+            [InlineKeyboardButton(text=f"💳 Оплатить {SUBSCRIPTION_PRICE} руб", pay=True)],
             [InlineKeyboardButton(text="◀️ Назад", callback_data="back")]
         ])
     )
