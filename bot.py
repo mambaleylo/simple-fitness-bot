@@ -287,13 +287,24 @@ async def cb_back(callback: types.CallbackQuery):
 async def cb_permanent(callback: types.CallbackQuery):
     uid = callback.from_user.id
     workouts = get_permanent_workouts()
+
+    async def _send_perm(text, kb):
+        try:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
+
     if not workouts:
-        await callback.message.edit_text("📭 Закреплённых тренировок пока нет.", reply_markup=back_keyboard())
+        await _send_perm("📭 Закреплённых тренировок пока нет.", back_keyboard())
         await callback.answer()
         return
     text = "🏋️ <b>Закреплённые тренировки</b> (доступны всегда):\n\n"
     text += "\n".join(f"• {w['title']}" for w in workouts)
-    await callback.message.edit_text(text, reply_markup=workout_list_keyboard(workouts, "permanent", uid), parse_mode="HTML")
+    await _send_perm(text, workout_list_keyboard(workouts, "permanent", uid))
     await callback.answer()
 
 
@@ -304,14 +315,26 @@ async def cb_weekly(callback: types.CallbackQuery):
         await callback.answer("❌ Подписка не активна! Купите доступ.", show_alert=True)
         return
     workouts = get_active_weekly_workouts()
+
+    async def _send(text, kb):
+        try:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
+
     if not workouts:
-        await callback.message.edit_text(
-            "📭 Тренировки этого месяца ещё не добавлены.\n\nОни появляются по расписанию: ПН, СР, ПТ в 10:00.",
-            reply_markup=back_keyboard()
+        await _send(
+            "📭 Тренировки этого месяца ещё не добавлены.\n\nОни появляются по расписанию: вс/вт/чт/пт в 21:00.",
+            back_keyboard()
         )
         await callback.answer()
         return
-    text = "📅 <b>Тренировки этого месяца:</b>\n\n"
+
+    text = "⭐ <b>Тренировки этого месяца:</b>\n\n"
     DAYS_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
     MONTHS_RU = ["", "янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
 
@@ -327,7 +350,7 @@ async def cb_weekly(callback: types.CallbackQuery):
         f"• {w['title']} ({fmt_date(w)})" if fmt_date(w) else f"• {w['title']}"
         for w in workouts
     )
-    await callback.message.edit_text(text, reply_markup=workout_list_keyboard(workouts, "weekly", uid), parse_mode="HTML")
+    await _send(text, workout_list_keyboard(workouts, "weekly", uid))
     await callback.answer()
 
 
