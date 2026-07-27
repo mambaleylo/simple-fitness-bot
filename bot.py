@@ -13,7 +13,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config import (
-    BOT_TOKEN, SCHEDULE_DAYS, SCHEDULE_TIME, ADMIN_IDS, MANAGER_IDS,
+    BOT_TOKEN, SCHEDULE_DAYS, SCHEDULE_TIME, ADMIN_IDS, MANAGER_IDS, TRAINER_IDS,
     BEPAID_PROVIDER_TOKEN, SUBSCRIPTION_PRICE, SUBSCRIPTION_DAYS,
     SUBSCRIPTION_WELCOME_TEXT, WELCOME_PHOTO_FILE_ID
 )
@@ -238,6 +238,31 @@ async def cmd_backup(message: types.Message):
         return
     await message.answer("⏳ Создаю бэкап...")
     await backup_database()
+
+
+@dp.message(F.video_note)
+async def handle_trainer_video_note(message: types.Message):
+    """Тренер прислал кружочек — рассылаем всем премиум подписчикам."""
+    if message.from_user.id not in TRAINER_IDS and message.from_user.id not in ADMIN_IDS:
+        return
+
+    users = get_all_users()
+    sent, failed = 0, 0
+
+    for u in users:
+        if is_subscribed(u["user_id"]):
+            try:
+                await bot.send_video_note(u["user_id"], message.video_note.file_id)
+                sent += 1
+                await asyncio.sleep(0.05)
+            except Exception:
+                failed += 1
+
+    await message.answer(
+        f"✅ Кружочек отправлен!\n"
+        f"📤 Получили: {sent} подписчиков\n"
+        f"❌ Ошибок: {failed}"
+    )
 
 
 async def cmd_getfileid(message: types.Message, state: FSMContext):
