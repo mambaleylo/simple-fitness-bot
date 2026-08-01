@@ -291,6 +291,24 @@ def add_weekly_workouts(workouts_list):
             )
 
 
+def get_pending_workouts():
+    """Возвращает все тренировки в очереди (ещё не отправленные)."""
+    with get_db() as conn:
+        return conn.execute(
+            'SELECT * FROM weekly_workouts WHERE sent_at IS NULL ORDER BY id',
+        ).fetchall()
+
+
+def get_workouts_to_cleanup():
+    """Показывает что будет удалено при очистке (отправленные старше 30 дней)."""
+    with get_db() as conn:
+        month_ago = (datetime.now() - timedelta(days=30)).date()
+        return conn.execute(
+            'SELECT * FROM weekly_workouts WHERE added_at < ? AND sent_at IS NOT NULL ORDER BY sent_at',
+            (str(month_ago),)
+        ).fetchall()
+
+
 def cleanup_old_workouts():
     """Удаляет только уже отправленные тренировки старше 30 дней.
     Неотправленные (sent_at IS NULL) не трогаем — они ещё в очереди."""
