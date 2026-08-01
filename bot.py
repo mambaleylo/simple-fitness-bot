@@ -31,7 +31,8 @@ from database import (
     update_extra_material, delete_extra_material,
     save_body_params, get_body_params, save_progress_photo, get_progress_photo,
     get_body_params_history, get_progress_photos, get_user_by_username,
-    revoke_subscription, save_payment_request, get_last_payment_request
+    revoke_subscription, save_payment_request, get_last_payment_request,
+    get_pending_workouts, get_workouts_to_cleanup
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -137,6 +138,7 @@ def admin_menu():
         [InlineKeyboardButton(text="✏️ Редактировать информацию по питанию", callback_data="adm:edit_lecture_list")],
         [InlineKeyboardButton(text="📋 Добавить доп. информацию", callback_data="adm:add_extra")],
         [InlineKeyboardButton(text="✏️ Редактировать доп. информацию", callback_data="adm:edit_extra_list")],
+        [InlineKeyboardButton(text="📋 Очередь тренировок", callback_data="adm:queue")],
         [InlineKeyboardButton(text="✅ Активировать подписку", callback_data="adm:activate")],
         [InlineKeyboardButton(text="❌ Отозвать подписку", callback_data="adm:revoke")],
         [InlineKeyboardButton(text="👥 Список пользователей", callback_data="adm:users")],
@@ -1224,18 +1226,87 @@ async def adm_users(callback: types.CallbackQuery):
     await callback.answer()
 
 
+@dp.callback_query(F.data == "adm:queue")
+async def adm_queue(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    pending = get_pending_workouts()
+    if not pending:
+        await callback.message.edit_text(
+            "📭 Очередь пуста.\n\nДобавь тренировки через «📅 Добавить тренировку месяца».",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+            ])
+        )
+        await callback.answer()
+        return
+
+    DAYS_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    text = f"📋 <b>Очередь тренировок ({len(pending)} шт.)</b>\n\n"
+    text += "Выйдут в следующем порядке по расписанию вс/вт/чт/пт в 21:00:\n\n"
+    for i, w in enumerate(pending, 1):
+        text += f"{i}. {w['title']}\n"
+    text += "\n<i>Тренировки выходят по одной в каждый день расписания</i>"
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+        ]),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
 @dp.callback_query(F.data == "adm:cleanup")
 async def adm_cleanup(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer()
         return
-    deleted = cleanup_old_workouts()
-    await callback.answer(
-        f"🗑️ Удалено {deleted} отправленных тренировок старше 30 дней.\n"
-        f"Неотправленные тренировки из очереди не тронуты.",
-        show_alert=True
+    to_delete = get_workouts_to_cleanup()
+    if not to_delete:
+        await callback.message.edit_text(
+            "✅ Нечего удалять — нет отправленных тренировок старше 30 дней.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+            ])
+        )
+        await callback.answer()
+        return
+
+    text = f"🗑️ <b>Подтверди удаление ({len(to_delete)} тренировок)</b>\n\n"
+    text += "Будут удалены отправленные тренировки старше 30 дней:\n\n"
+    for w in to_delete:
+        date = w["sent_at"][:10] if w["sent_at"] else "—"
+        text += f"• {w['title']} (отправлена {date})\n"
+    text += "\n⚠️ <b>Очередь не затрагивается.</b> Удаление необратимо."
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Да, удалить", callback_data="adm:cleanup_confirm")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="adm:back")]
+        ]),
+        parse_mode="HTML"
     )
-    await send_admin_panel(callback, edit=True)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "adm:cleanup_confirm")
+async def adm_cleanup_confirm(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    deleted = cleanup_old_workouts()
+    await callback.message.edit_text(
+        f"✅ <b>Удалено {deleted} тренировок.</b>\n\nОчередь и неотправленные тренировки не тронуты.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+        ]),
+        parse_mode="HTML"
+    )
+    await callback.answer(f"Удалено: {deleted}")
 
 
 @dp.callback_query(F.data == "adm:revoke")
@@ -2087,11 +2158,20 @@ async def adm_broadcast_send(message: types.Message, state: FSMContext):
 # ========== SCHEDULER ==========
 
 async def scheduled_cleanup():
+    to_delete = get_workouts_to_cleanup()
+    if not to_delete:
+        logging.info("Автоочистка: нечего удалять")
+        return
+    names = "\n".join(f"• {w['title']} (отправлена {(w['sent_at'] or '')[:10]})" for w in to_delete)
     deleted = cleanup_old_workouts()
     logging.info(f"Автоочистка: удалено {deleted}")
     for admin_id in ADMIN_IDS:
         try:
-            await bot.send_message(admin_id, f"🗑️ Автоочистка: удалено {deleted} старых тренировок.")
+            await bot.send_message(
+                admin_id,
+                f"🗑️ <b>Автоочистка выполнена — удалено {deleted} тренировок:</b>\n\n{names}",
+                parse_mode="HTML"
+            )
         except Exception:
             pass
 
