@@ -1309,6 +1309,20 @@ async def adm_cleanup_confirm(callback: types.CallbackQuery):
     await callback.answer(f"Удалено: {deleted}")
 
 
+@dp.callback_query(F.data == "adm:cleanup_skip")
+async def adm_cleanup_skip(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await callback.message.edit_text(
+        "❌ Удаление отменено — тренировки сохранены.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ В панель", callback_data="adm:back")]
+        ])
+    )
+    await callback.answer("Отменено")
+
+
 @dp.callback_query(F.data == "adm:revoke")
 async def adm_revoke_start(callback: types.CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
@@ -2158,18 +2172,32 @@ async def adm_broadcast_send(message: types.Message, state: FSMContext):
 # ========== SCHEDULER ==========
 
 async def scheduled_cleanup():
+    """1-го числа — присылает список что можно удалить и ждёт подтверждения."""
     to_delete = get_workouts_to_cleanup()
     if not to_delete:
         logging.info("Автоочистка: нечего удалять")
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(admin_id, "✅ Плановая проверка: старых тренировок нет, ничего удалять не нужно.")
+            except Exception:
+                pass
         return
+
     names = "\n".join(f"• {w['title']} (отправлена {(w['sent_at'] or '')[:10]})" for w in to_delete)
-    deleted = cleanup_old_workouts()
-    logging.info(f"Автоочистка: удалено {deleted}")
+    text = (
+        f"🗑️ <b>Плановая очистка — {len(to_delete)} тренировок готовы к удалению:</b>\n\n"
+        f"{names}\n\n"
+        f"⚠️ Очередь и неотправленные тренировки не затрагиваются.\n"
+        f"Нажми кнопку для подтверждения удаления:"
+    )
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(
-                admin_id,
-                f"🗑️ <b>Автоочистка выполнена — удалено {deleted} тренировок:</b>\n\n{names}",
+                admin_id, text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=f"✅ Удалить {len(to_delete)} тренировок", callback_data="adm:cleanup_confirm")],
+                    [InlineKeyboardButton(text="❌ Не удалять", callback_data="adm:cleanup_skip")],
+                ]),
                 parse_mode="HTML"
             )
         except Exception:
